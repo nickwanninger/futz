@@ -1,0 +1,10 @@
+er-tmp.dot
+er-tmp.png
+qconv
+qconv-real.cgi
+qconv-history.tmp
+qconv-latex-tmp.*
+src/parse/
+objs/
+dist/
+dist-newstyle
