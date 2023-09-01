@@ -73,7 +73,7 @@ fmtExp (S.Var s) = emit s
 
 
 fmtExp (S.Lambda name body) = do
-  emit "("
+  emit "(\\"
   fmtArg name
   emit " -> "
   fmtExp body

@@ -1,22 +1,5 @@
 module Syntax where
 
--- The token type:
-data Token = TLet
-           | TIn
-           | TInt Int
-           | TSym String
-           | TEq
-           | TPlus
-           | TMinus
-           | TTimes
-           | TDiv
-           | TLParen
-           | TRParen
-           | TArrow
-           | TLambda
-           | TOf
-  deriving (Eq,Show)
-
 
 -- Syntax expressions
 data Exp = Let String Exp Exp
@@ -31,10 +14,32 @@ data Exp = Let String Exp Exp
          | App Exp Exp       -- Application
   deriving Show
 
-data Argument = Named String
+newtype Argument = Named String
   deriving Show
 
+-- The token type:
+data TokenClass = TSyntax
+                | TInt
+                | TSym
+                | TEq
+                | TPlus
+                | TMinus
+                | TTimes
+                | TDiv
+                | TLParen
+                | TRParen
+                | TArrow
+                | TLambda
+                | TOf
+                | TEOF
+  deriving (Eq,Show)
 
-expandLambdaArguments :: [Argument] -> Exp -> Exp
-expandLambdaArguments (x:[]) body = Lambda x body
-expandLambdaArguments (x:xs) body = Lambda x (expandLambdaArguments xs body)
+
+-- A line, column position (1 indexed)
+data Position = Pos Int Int
+  deriving (Eq, Show)
+
+-- A token is a Location in a file, a
+-- class, and the raw string value
+data Token = Tok Position TokenClass String
+  deriving (Eq, Show)

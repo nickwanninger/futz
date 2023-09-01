@@ -1,8 +1,1 @@
--- let add_three x y z = x + y + z
---  in add_three x y z
-
-
--- square :: Int -> Int
--- x = x + 1
-
-x y -> x + y
+x * 2

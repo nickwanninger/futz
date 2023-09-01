@@ -27,5 +27,12 @@ main = do
     [file] -> do
       handle <- openFile file ReadMode
       contents <- hGetContents handle
-      putStrLn $ PR.format (P.parseFutz (L.alexScanTokens contents))
-    _      -> putStrLn "Usage: futz <prog.futz>"
+      putStrLn contents
+      let lexRes = L.scanTokens contents
+      case lexRes of
+        Left err -> putStrLn err
+        Right tokens -> do
+            let ast = P.parseFutz tokens
+            pPrint ast
+            putStrLn $ PR.format ast
+    _ -> putStrLn "Usage: futz <prog.futz>"
