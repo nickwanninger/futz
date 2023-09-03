@@ -8,7 +8,7 @@ cabal-version:       >=1.10
 Executable futz
   hs-source-dirs:      src, src/parse
   main-is:             Main.hs
-  other-modules:       Lexer Parser Printer Syntax
+  other-modules:       Lexer Parser Printer Syntax Types
   build-depends:       base, array, containers, process, text, mtl,
                        pretty-simple==4.1.2.0,
                        bytestring >= 0.11.4.0

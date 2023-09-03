@@ -1,7 +1,9 @@
 module Syntax where
 
+import qualified Types as T
 
--- Syntax expressions
+
+-- Syntax expressions. These all evaluate to a value of some type.
 data Exp = Let String Exp Exp
          | Plus Exp Exp
          | Minus Exp Exp
@@ -10,28 +12,35 @@ data Exp = Let String Exp Exp
          | Negate Exp
          | Int Int
          | Var String
-         | Lambda Argument Exp -- Expressions w/ a body
+         | Lambda String Exp -- Expressions w/ a body
          | App Exp Exp       -- Application
-  deriving Show
+  deriving (Eq, Show)
+
+data TopLevel = Decl String Exp    -- A top level declaration
+              | TypeDecl String T.Type --  A top level typing
+  deriving (Eq, Show)
+
 
 newtype Argument = Named String
-  deriving Show
+  deriving (Eq, Show)
 
 -- The token type:
-data TokenClass = TSyntax
-                | TInt
-                | TSym
-                | TEq
-                | TPlus
-                | TMinus
-                | TTimes
-                | TDiv
-                | TLParen
-                | TRParen
-                | TArrow
-                | TLambda
-                | TOf
-                | TEOF
+data Lexeme = LSyntax
+            | LInt
+            | LSym
+            | LType
+            | LEq
+            | LPlus
+            | LMinus
+            | LTimes
+            | LDiv
+            | LLParen
+            | LRParen
+            | LArrow
+            | LLambda
+            | LOf
+            | LPipe
+            | LIsType
   deriving (Eq,Show)
 
 
@@ -41,5 +50,7 @@ data Position = Pos Int Int
 
 -- A token is a Location in a file, a
 -- class, and the raw string value
-data Token = Tok Position TokenClass String
+data Token = Tok Position Lexeme String
+           | TStartOfLine
+           | TEndOfFile
   deriving (Eq, Show)

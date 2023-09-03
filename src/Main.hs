@@ -32,7 +32,8 @@ main = do
       case lexRes of
         Left err -> putStrLn err
         Right tokens -> do
+            print tokens
             let ast = P.parseFutz tokens
             pPrint ast
-            putStrLn $ PR.format ast
+            -- putStrLn $ PR.format ast
     _ -> putStrLn "Usage: futz <prog.futz>"
