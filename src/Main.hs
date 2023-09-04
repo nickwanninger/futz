@@ -12,11 +12,13 @@ import qualified Futz.Parser as P
 import qualified Futz.Printer as PR
 import qualified Futz.Syntax as S
 import qualified Futz.TypeCheck as TC
+
 import System.Environment
 import System.Exit
 import System.IO
 import System.Process
 import Text.Pretty.Simple (pPrint)
+
 
 main = do
   args <- getArgs
@@ -41,7 +43,9 @@ typeCheckTest decl@(S.Decl name body) = do
   case TC.inferType body of
     Left err -> print err
     Right t -> do
-      putStrLn $ "Type: " <> show t
+      putStrLn $ "Typ: " <> show t
+
+  return ()
 
 -- putStrLn $ "Type: " <> (show $ TC.inferType body)
 -- case TC.inferTop decl of

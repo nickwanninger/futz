@@ -29,7 +29,7 @@ inferType exp =
       let unification = unify (Set.toList $ constraints s)
        in case unification of
             Left err -> Left err
-            Right unification -> Right (generalize (foldl (flip apply) t unification))
+            Right unification -> Right (normalize (generalize (foldl (flip apply) t unification)))
 
 -- Right $ T.ForAll [] T.tInt
 
@@ -219,3 +219,22 @@ unifyM c = case c of
 
 subst :: Subst -> [Constraint] -> [Constraint]
 subst s = map (apply s)
+
+
+letters :: [String]
+letters = [1 ..] >>= flip replicateM ['a' .. 'z']
+normalize :: T.TypeScheme -> T.TypeScheme
+normalize (T.ForAll ts body) = T.ForAll (fmap snd ord) (normtype body)
+  where
+    ord = zip (nub $ fv body) letters
+
+    fv (T.TVar a)   = [a]
+    fv (T.TArrow a b) = fv a ++ fv b
+    fv (T.TNamed _ [])   = [] -- TODO: constructors!
+
+    normtype (T.TArrow a b) = T.TArrow (normtype a) (normtype b)
+    normtype (T.TNamed a _)   = TNamed a [] -- TODO: constructors!
+    normtype (TVar a)   =
+      case lookup a ord of
+        Just x -> T.TVar x
+        Nothing -> error "type variable not in signature"
