@@ -1,27 +1,29 @@
-module Syntax where
+module Futz.Syntax where
 
-import qualified Types as T
+import qualified Futz.Types as T
 
+
+type Var = String
 
 -- Syntax expressions. These all evaluate to a value of some type.
-data Exp = Let String Exp Exp
+data Exp = Let Var Exp Exp
          | Plus Exp Exp
          | Minus Exp Exp
          | Times Exp Exp
          | Div Exp Exp
          | Negate Exp
          | Int Int
-         | Var String
-         | Lambda String Exp -- Expressions w/ a body
+         | Var Var
+         | Lambda Var Exp -- Expressions w/ a body
          | App Exp Exp       -- Application
   deriving (Eq, Show)
 
-data TopLevel = Decl String Exp    -- A top level declaration
-              | TypeDecl String T.Type --  A top level typing
+data TopLevel = Decl Var Exp    -- A top level declaration
+              | TypeDecl Var T.Type --  A top level typing
   deriving (Eq, Show)
 
 
-newtype Argument = Named String
+newtype Argument = Named Var
   deriving (Eq, Show)
 
 -- The token type:
@@ -29,6 +31,7 @@ data Lexeme = LSyntax
             | LInt
             | LSym
             | LType
+            | LTypeVar
             | LEq
             | LPlus
             | LMinus

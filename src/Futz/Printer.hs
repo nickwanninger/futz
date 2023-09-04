@@ -1,10 +1,10 @@
-module Printer (
+module Futz.Printer (
   format
 ) where
 
 
-import qualified Parser as P
-import qualified Syntax as S
+import qualified Futz.Parser as P
+import qualified Futz.Syntax as S
 -- import Control.Monad.State.Lazy
 import Control.Monad.State
 import Control.Monad.Writer

@@ -1,8 +1,8 @@
 {
-module Parser where
-import Lexer
-import qualified Types as T
-import Syntax
+module Futz.Parser where
+import Futz.Lexer
+import qualified Futz.Types as T
+import Futz.Syntax
 }
 
 %name parseFutz
@@ -19,19 +19,20 @@ import Syntax
     int  { Tok _ LInt $$ }
     var  { Tok _ LSym $$ }
     -- Symbols
-    '='  { Tok _ LEq  _}
-    '+'  { Tok _ LPlus _ }
-    '-'  { Tok _ LMinus _ }
-    '*'  { Tok _ LTimes _ }
-    '/'  { Tok _ LDiv _ }
-    '('  { Tok _ LLParen _ }
-    ')'  { Tok _ LRParen _ }
-    arr  { Tok _ LArrow _ }
-    'λ'  { Tok _ LLambda _ }
-    typ  { Tok _ LType $$ }
-    "::" { Tok _ LIsType _ }
+    '='      { Tok _ LEq  _}
+    '+'      { Tok _ LPlus _ }
+    '-'      { Tok _ LMinus _ }
+    '*'      { Tok _ LTimes _ }
+    '/'      { Tok _ LDiv _ }
+    '('      { Tok _ LLParen _ }
+    ')'      { Tok _ LRParen _ }
+    arr      { Tok _ LArrow _ }
+    'λ'      { Tok _ LLambda _ }
+    tname    { Tok _ LType $$ }
+    tvar     { Tok _ LTypeVar $$ }
+    "::"     { Tok _ LIsType _ }
     -- Magic stuff inserted by the tokenizer
-    sol  { TStartOfLine }
+    sol      { TStartOfLine }
 
 %right APP
 
@@ -90,9 +91,21 @@ args : argument                   { [$1] }
 unmatching_args : var                   { [$1] }
                 | var unmatching_args   { $1 : $2 }
 
-type : type arr type              { T.TArrow $1 $3 }
-     | typ                        { T.TNamed $1 }
-     | '(' type ')'               { $2 }
+
+typeParameters : simpleType                   { [$1] }
+               | simpleType typeParameters    { $1 : $2 }
+
+
+-- A simpleType is a type that is either a single name, or
+-- a complex type wrapped in parens
+-- (arrows are not simple types)
+simpleType : tname                { T.TNamed $1 [] } 
+           | tvar                 { T.TVar (tail $1) }
+           | '(' type ')'         { $2 }
+
+type : simpleType                 { $1 }
+     | type arr type              { T.TArrow $1 $3 }
+     | tname typeParameters       { T.TNamed $1 $2 }
 
 {
 

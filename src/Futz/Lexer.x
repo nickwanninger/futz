@@ -1,8 +1,8 @@
 
 {
-module Lexer where
+module Futz.Lexer where
 import Data.Char (chr)
-import Syntax
+import Futz.Syntax
 
 -- A good example of a parser can be found here:
 -- https://github.com/haskell/alex/blob/master/examples/haskell.x
@@ -49,6 +49,7 @@ tokens :-
   \::                           { mkL LIsType }
   $small $idchar*               { mkL LSym }
   $large $idchar*               { mkL LType }
+  ' $small $idchar*             { mkL LTypeVar }
 
 {
   

@@ -1,15 +1,16 @@
 {-# LANGUAGE GADTs, KindSignatures, DataKinds #-}
 
 
-module Main where
+module Futz.Main where
 
 -- import ErrM
 import Text.Pretty.Simple (pPrint)
 
 
-import qualified Lexer as L
-import qualified Parser as P
-import Printer as PR
+import qualified Futz.Lexer as L
+import qualified Futz.Parser as P
+import qualified Futz.Syntax as S
+import qualified Futz.Printer as PR
 -- import LexRelAlgebra(Token(..), Tok(..), BTree(..), resWords)
 -- import ParRelAlgebra(myLexer, pRel)
 
@@ -34,6 +35,14 @@ main = do
         Right tokens -> do
             print tokens
             let ast = P.parseFutz tokens
-            pPrint ast
+            -- pPrint ast
+            mapM_ typeCheckTest ast
             -- putStrLn $ PR.format ast
     _ -> putStrLn "Usage: futz <prog.futz>"
+
+  
+typeCheckTest (S.Decl name body) = do
+  putStrLn $ "Typechecking '" <> name <> "':"
+  pPrint body
+
+typeCheckTest (S.TypeDecl _ _) = return ()

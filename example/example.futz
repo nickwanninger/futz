@@ -1,9 +1,1 @@
--- gOfX :: (Int -> Int) -> (Int -> Int) -> Int -> Int
-foo = f of g x
-
-
-fuzz = let x = 4
-  in x * 4
-
--- square :: Int -> Int
--- square = \ x -> x * x
+id = 10

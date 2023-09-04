@@ -6,10 +6,12 @@ cabal-version:       >=1.10
 
 
 Executable futz
-  hs-source-dirs:      src, src/parse
-  main-is:             Main.hs
-  other-modules:       Lexer Parser Printer Syntax Types
+  hs-source-dirs:      src
+  main-is:             Futz/Main.hs
+  other-modules:       Futz.Lexer Futz.Parser Futz.Printer Futz.Syntax Futz.Types Futz.TypeCheck
+
   build-depends:       base, array, containers, process, text, mtl,
+                       monad-st,
                        pretty-simple==4.1.2.0,
                        bytestring >= 0.11.4.0
   build-tools:         alex==3.4.0.0, happy
