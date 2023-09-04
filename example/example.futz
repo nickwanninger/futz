@@ -1,1 +1,11 @@
-id = 10
+-- typeTest = let id = \x -> x in id 42
+-- addTest = let add = \x y -> x + y in add 1 2
+-- idTest = (\x -> x) 42
+-- dumbLet = let x = 42 in x
+
+y = \f -> (\x -> f (x x)) (\x -> (f(x x)))
+
+apply = let apply = \f x -> f of x in apply (λx -> 1)
+
+fib = let fib = \n -> if n then n else fib (n * 1) + fib (n * 2) in fib
+add = let add = \x -> if x then x + 1 else x in add

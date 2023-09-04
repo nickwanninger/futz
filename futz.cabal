@@ -7,7 +7,7 @@ cabal-version:       >=1.10
 
 Executable futz
   hs-source-dirs:      src
-  main-is:             Futz/Main.hs
+  main-is:             Main.hs
   other-modules:       Futz.Lexer Futz.Parser Futz.Printer Futz.Syntax Futz.Types Futz.TypeCheck
 
   build-depends:       base, array, containers, process, text, mtl,

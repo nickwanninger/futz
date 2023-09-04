@@ -8,10 +8,7 @@
 
 
 
-module Futz.Types (
-  Type(..),
-  TypeScheme(..)
-)where
+module Futz.Types where
 
 import Control.Monad
 import Data.Foldable
@@ -19,17 +16,29 @@ import Data.List
 
 
 type TVar = String
-  
-
-data Type = TNamed String [Type] -- A named type (like `Int`) and the arguments used to specify it
-                                 -- ex: Maybe 'a will be one of these with one argument
-          | TArrow Type Type     -- A lambda type
-          | TVar String          -- A type variable
-  deriving (Eq, Ord, Show)
+data Type = TNamed String [Type]
+          | TArrow Type Type
+          | TVar String
+  deriving (Eq, Ord)
 
 infixr `TArrow`
 
+instance Show Type where
+  show (TNamed name args) = name <> ""
+  show (TArrow a b) = "(" <> show a <> " -> " <> show b <> ")"
+  show (TVar name) = "'" <> name
 
--- A representation of `forall 'a 'b 'c . T`
+
 data TypeScheme = TForAll [TVar] Type
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show TypeScheme where
+  show (TForAll vars t) = "forall " <> unwords (map ('\'' :) vars) <> " . " <> show t
+
+
+builtinType :: String -> Type
+builtinType s = TNamed s []
+
+
+tInt :: Type
+tInt = builtinType "Int"

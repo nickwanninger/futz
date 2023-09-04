@@ -15,6 +15,9 @@ import Futz.Syntax
     let  { Tok _ LSyntax "let" }
     in   { Tok _ LSyntax "in"}
     of   { Tok _ LSyntax "of"}
+    if   { Tok _ LSyntax "if"}
+    then { Tok _ LSyntax "then"}
+    else { Tok _ LSyntax "else"}
     -- Literals
     int  { Tok _ LInt $$ }
     var  { Tok _ LSym $$ }
@@ -57,6 +60,7 @@ statement
 
 exp
   : let var '=' exp in exp                 { Let $2 $4 $6 }
+  | if exp then exp else exp               { IfElse $2 $4 $6 }
   -- | let var args '=' exp in exp            { Let $2 (expandLambdaArguments $3 $5) $7 }
   | 'λ' unmatching_args arr exp            { expandLambdaArguments $2 $4 }
   | expapp                                 { $1 }
