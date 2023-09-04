@@ -36,7 +36,11 @@ instance Show Exp where
 
 data TopLevel = Decl Var Exp    -- A top level declaration
               | TypeDecl Var T.Type --  A top level typing
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show TopLevel where
+  show (Decl v e) = v <> " = " <> show e
+  show _ = "unk"
 
 
 newtype Argument = Named Var

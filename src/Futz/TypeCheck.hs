@@ -2,6 +2,7 @@ module Futz.TypeCheck where
 
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Char (chr, ord)
 import Data.Foldable (foldr)
 import Data.List (nub)
 import qualified Data.Map as Map
@@ -18,6 +19,19 @@ inferTop (TypeDecl name t) = undefined
 inferTop (Decl name e) =
   case runState (inferExp e) defaultInferState of
     (t, s) -> (t, Set.toList $ constraints s)
+
+-- This function is an entrypoint to the type inference system, and
+-- returns the type scheme used to describe the type of some expression
+inferType :: S.Exp -> Either TypeError T.TypeScheme
+inferType exp =
+  case runState (inferExp exp) defaultInferState of
+    (t, s) ->
+      let unification = unify (Set.toList $ constraints s)
+       in case unification of
+            Left err -> Left err
+            Right unification -> Right (generalize (foldl (flip apply) t unification))
+
+-- Right $ T.ForAll [] T.tInt
 
 data Constraint = EqConstraint Type Type -- two types are equal
   deriving (Eq, Ord)
@@ -42,13 +56,19 @@ defaultInferState =
 -- the inference monad
 type InferM a = State InferState a
 
+idToTypeVarName :: Int -> T.TVar
+idToTypeVarName id =
+  if (id + ord 'a') > ord 'z'
+    then "t" <> show id
+    else [chr $ ord 'a' + id]
+
 -- make a new unique variable
-newTypeVar :: InferM Type
-newTypeVar = do
+fresh :: InferM Type
+fresh = do
   ps <- get
   let id = nextId ps
   put $ ps {nextId = id + 1}
-  return $ T.TVar ("a" <> show id)
+  return $ T.TVar $ idToTypeVarName id
 
 addConstraint :: Constraint -> InferM ()
 addConstraint c = do
@@ -80,7 +100,7 @@ inferExp e = case e of
   -- TODO: this doesn't work with recursion. The type of the name needs
   --       to be available in the value's inferences!
   Let name value body -> do
-    tValue <- newTypeVar
+    tValue <- fresh
     tValue' <- withDef name tValue $ inferExp value
     addConstraint $ EqConstraint tValue tValue'
     withDef name tValue' $ inferExp body
@@ -92,7 +112,7 @@ inferExp e = case e of
   Int i -> return T.tInt -- TODO: should check it's an int!
   Var name -> do
     st <- get
-    maybe newTypeVar return (Map.lookup name $ gamma st)
+    maybe fresh return (Map.lookup name $ gamma st)
   IfElse tst thn els -> do
     tstT <- inferExp tst
     thnT <- inferExp thn
@@ -101,16 +121,47 @@ inferExp e = case e of
     -- return elsT
     return thnT
   Lambda x e -> do
-    tArg <- newTypeVar -- make up a new value for the argument
+    tArg <- fresh -- make up a new value for the argument
     tReturn <- withDef x tArg $ inferExp e
     return $ T.TArrow tArg tReturn
   App f a -> do
-    t <- newTypeVar
+    t <- fresh
     t1 <- inferExp f
     t2 <- inferExp a
     addConstraint $ EqConstraint t1 $ T.TArrow t2 t
     return t
 
+generalize :: T.Type -> T.TypeScheme
+generalize t = T.ForAll as t
+  where
+    as = Set.toList $ ftv t
+
+-- newtype TypeEnv = TypeEnv (Map.Map Var T.TypeScheme)
+--
+-- lookupEnv :: TypeEnv -> Var -> InferM (Subst, Type)
+-- lookupEnv (TypeEnv env) x =
+--   case Map.lookup x env of
+--     Nothing -> undefined -- TODO: Undefined variable
+--     Just s  -> do t <- instantiate s
+--                   return (nullSubst, t)
+--
+-- w :: TypeEnv -> Exp -> InferM (Subst, T.Type)
+-- w env e = undefined
+
+
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
 ------------ Unification
 
 -- type Subst = Map.Map T.TVar T.Type
@@ -146,6 +197,7 @@ type Unify a = Except TypeError a
 data TypeError
   = UnificationFail Type Type
   | InfiniteType TVar Type
+  deriving (Eq, Show)
 
 unify :: [Constraint] -> Either TypeError [Subst]
 unify c = runExcept (unifyM c)

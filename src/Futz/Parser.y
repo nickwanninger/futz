@@ -114,7 +114,8 @@ type : simpleType                 { $1 }
 {
 
 parseError :: [Token] -> a
-parseError ((Tok (Pos line col) tc raw):ts) = error $ "Parse error near '" <> raw <> "' at line " <> (show line) <> " column " <> (show col)
+parseError ((Tok (Pos line col) tc raw):ts)
+  = error $ "Parse error near '" <> raw <> "' at line " <> (show line) <> " column " <> (show col)
 parseError e = error $ "Unexplained parse error: " <> (show e)
 
 expandLambdaArguments :: [String] -> Exp -> Exp
