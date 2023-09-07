@@ -7,18 +7,28 @@ module Main where
 
 import Data.List
 import qualified Data.Set as Set
+import Debug.Trace
+import Futz.Infer
 import qualified Futz.Lexer as L
 import qualified Futz.Parser as P
 import qualified Futz.Printer as PR
-import qualified Futz.Syntax as S
-import qualified Futz.TypeCheck as TC
-
+import Futz.Syntax
+import Futz.Types
 import System.Environment
 import System.Exit
 import System.IO
 import System.Process
 import Text.Pretty.Simple (pPrint)
 
+-- temporary helper!
+parseType :: String -> Type
+parseType s = case L.scanTokens ("s :: " <> s) of
+  Left err -> undefined
+  Right tokens ->
+    let ast = P.parseFutz tokens
+     in case ast of
+          [TypeDecl name t] -> t
+          _ -> undefined
 
 main = do
   args <- getArgs
@@ -26,40 +36,44 @@ main = do
     [file] -> do
       handle <- openFile file ReadMode
       contents <- hGetContents handle
-      putStrLn contents
+      -- putStrLn contents
       let lexRes = L.scanTokens contents
       case lexRes of
         Left err -> putStrLn err
         Right tokens -> do
-          -- print tokens
+          -- let t1 = parseType "'a0 -> 'a1"
+          -- let t2 = parseType "('b -> 'c) -> ('a -> 'b) -> 'a -> 'c"
+          -- print (quantify [tyvar "a0"] ([] :=> t1))
+          -- return ()
           let ast = P.parseFutz tokens
-          -- pPrint ast
-          mapM_ typeCheckTest ast
-    -- putStrLn $ PR.format ast
+          let prog = toProgram ast
+          let env = exampleInsts initialEnv
+          case env of
+            Nothing -> print "fail!"
+            Just env -> do
+              let as = initialAssumptions ast
+              putStrLn "\nInitial:"
+              mapM_ print as
+              -- putStrLn "\nInferring:"
+              let as' = tiProgram env as prog
+              putStrLn "\nNew Inferrence:"
+              mapM_ print as'
     _ -> putStrLn "Usage: futz <prog.futz>"
 
-typeCheckTest decl@(S.Decl name body) = do
-  putStrLn $ "\nTypechecking " <> show decl
-  case TC.inferType body of
-    Left err -> print err
-    Right t -> do
-      putStrLn $ "Typ: " <> show t
+dumbScheme :: Type -> Scheme
+dumbScheme t = quantify (tv t) ([] :=> t)
 
-  return ()
+initialAssumptions :: [TopLevel] -> [Assump]
+initialAssumptions (v@(Decl name val) : tls) = a : initialAssumptions tls
+  where
+    a = name :>: dumbScheme (TVar (tyvar "a"))
+initialAssumptions (v@(TypeDecl name t) : ts) = (name :>: dumbScheme t) : initialAssumptions ts
+initialAssumptions [] = []
 
--- putStrLn $ "Type: " <> (show $ TC.inferType body)
--- case TC.inferTop decl of
---   (t, constraints) -> do
---     putStrLn $ "Type: " <> TC.inferType t
---     -- putStrLn "Constraints:"
---     -- mapM_ print constraints
---     -- convert a list of constraints to a set of substitutions
---     -- which can be applied w/ `foldr apply ...`
---     let unification = TC.unify constraints
---     -- mapM_ print unification
---     case unification of
---       Left err -> return ()
---       Right unification -> putStrLn $ "Unified Type: " <> show (foldl (flip TC.apply) t unification)
---     return ()
-
-typeCheckTest (S.TypeDecl _ _) = return ()
+toProgram :: [TopLevel] -> Program
+toProgram (v@(Decl name val) : tls) = dec : toProgram tls
+  where
+    im = Impl name [Binding [] val]
+    dec = BindGroup [] [im]
+toProgram (t : ts) = toProgram ts
+toProgram [] = []

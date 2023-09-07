@@ -1,216 +1,349 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Use zipWithM" #-}
+{-# HLINT ignore "Eta reduce" #-}
 module Futz.Infer where
 
-import Control.Monad.Except
-import Control.Monad.State
-import Data.Foldable (foldr)
-import Data.List (intercalate, nub)
-import qualified Data.Map as Map
-import Data.Monoid
-import qualified Data.Set as Set
+import Control.Applicative -- Otherwise you can't do the Applicative instance.
+import Control.Monad (ap, liftM)
+import Data.List
+import Debug.Trace
 import Futz.Syntax
 import Futz.Types
-import Prelude hiding (foldr)
 
-newtype TypeEnv = TypeEnv (Map.Map Var TypeScheme)
-  deriving (Eq)
+-------------------------------------------------------------------------------
+--
+--
+--
+--
+--   A Type Inference Monad
+--
+-- It is now quite standard to use monads as a way to hide certain aspects of “plumbing”
+-- and to draw attention instead to more important aspects of a program's design [Wadler, 1992].
+-- The purpose of this section is to define the monad that will be used in the description of
+-- the main type inference algorithm in Type Inference. Our choice of monad is motivated by the
+-- needs of maintaining a “current substitution” and of generating fresh type variables during
+-- typechecking. In a more realistic implementation, we might also want to add error reporting
+-- facilities, but in this the crude but simple fail function from the Haskell prelude is
+-- all that we require. It follows that we need a simple state monad with only a substitution
+-- and an integer (from which we can generate new type variables) as its state:
+newtype TI a = TI (Subst -> Int -> (Subst, Int, a)) -- TODO: rewrite me as StateT!
 
-instance Show TypeEnv where
-  show (TypeEnv m) = intercalate "\n" $ map f entries
-    where
-      entries = Map.toList m
-      f (name, scheme) = name <> " :: " <> show scheme
+instance Applicative TI where
+  pure x = TI (\s n -> (s, n, x))
+  (<*>) = ap
 
-newtype Unique = Unique {count :: Int}
+instance Functor TI where
+  fmap = liftM
 
-type Infer = ExceptT TypeError (State Unique)
+instance Monad TI where
+  return = pure -- TI (\s n -> (s, n, x))
+  TI f >>= g =
+    TI
+      ( \s n -> case f s n of
+          (s', m, x) ->
+            let TI gx = g x
+             in gx s' m
+      )
 
-type Subst = Map.Map TVar Type
+instance MonadFail TI where
+  fail s = trace s undefined -- TODO: how do we propegate errors?
 
-data TypeError
-  = UnificationFail Type Type
-  | InfiniteType TVar Type
-  | UnboundVariable String
-  deriving (Show)
+runTI :: TI a -> a
+runTI (TI f) = x where (s, n, x) = f nullSubst 0
 
-runInfer :: Infer (Subst, Type) -> Either TypeError TypeScheme
-runInfer m = case evalState (runExceptT m) initUnique of
-  Left err -> Left err
-  Right res -> Right $ closeOver res
+-- The getSubst operation returns the current substitution, while unify extends it with a most
+-- general unifier of its arguments:
 
-closeOver :: (Map.Map TVar Type, Type) -> TypeScheme
-closeOver (sub, ty) = normalize sc
+getSubst :: TI Subst
+getSubst = TI (\s n -> (s, n, s))
+
+unify :: Type -> Type -> TI ()
+unify t1 t2 = do
+  s <- getSubst
+  u <- mgu (apply s t1) (apply s t2)
+  extSubst u
+
+-- For clarity, we define the operation that extends the substitution as a separate function,
+-- even though it is used only here in the definition of unify:
+extSubst :: Subst -> TI ()
+extSubst s' = TI (\s n -> (s' @@ s, n, ()))
+
+-- Overall, the decision to hide the current substitution in the TI monad makes the presentation
+-- of type inference much clearer. In particular, it avoids heavy use of apply every time an
+-- extension is (or might have been) computed.
+--
+-- There is only one primitive that deals with the integer portion of the state, using it in
+-- combination with enumId to generate a new type variable of a specified kind:
+--
+newIdNum :: TI Int
+newIdNum = do
+  TI (\s n -> (s, n + 1, n))
+
+newTVar :: Kind -> TI Type
+newTVar k = do
+  n <- newIdNum
+  TI (\s n -> (s, n, TVar (Tyvar (enumId n) k)))
+
+-- One place where newTVar is useful is in instantiating a type scheme
+-- with new type variables of appropriate kinds:
+freshInst :: Scheme -> TI (Qual Type)
+freshInst (Forall ks qt) = do
+  ts <- mapM newTVar ks
+  return (inst ts qt)
+
+-- The structure of this definition guarantees that ts has exactly the right number of type
+-- variables, and each with the right kind, to match ks. Hence, if the type scheme is well-formed,
+-- then the qualified type returned by freshInst will not contain any unbound generics of the form
+-- TGen n. The definition relies on an auxiliary function inst, which is a variation of apply that
+-- works on generic variables. In other words, inst ts t replaces each occurrence of a generic variable
+-- TGen n in t with ts!!n. It is convenient to build up the definition of inst using overloading:
+
+class Instantiate t where
+  inst :: [Type] -> t -> t
+
+instance Instantiate Type where
+  inst ts (TAp l r) = TAp (inst ts l) (inst ts r)
+  inst ts (TGen n) = ts !! n
+  inst ts t = t
+
+instance Instantiate a => Instantiate [a] where
+  inst ts = map (inst ts)
+
+instance Instantiate t => Instantiate (Qual t) where
+  inst ts (ps :=> t) = inst ts ps :=> inst ts t
+
+instance Instantiate Pred where
+  inst ts (IsIn c t) = IsIn c (inst ts t)
+
+-------------------------------------------------------------------------------
+--
+--
+--
+--
+--   Type Inference
+--
+-- With this section we have reached the heart of the paper, detailing our algorithm for type
+-- inference. It is here that we finally see how the machinery that has been built up in earlier
+-- sections is actually put to use. We develop the complete algorithm in stages, working through
+-- the abstract syntax of the input language from the simplest part (literals) to the most complex
+-- (binding groups). Most of the typing rules are expressed by functions whose types are simple
+-- variants of the following synonym:
+type Infer e t = ClassEnv -> [Assump] -> e -> TI ([Pred], t)
+
+-- Expressions
+-- Next we describe type inference for expressions, represented by the Expr datatype:
+tiExpr :: Infer Exp Type
+tiExpr ce as e = case e of
+  Var i -> do
+    sc <- Futz.Types.find i as
+    (ps :=> t) <- freshInst sc
+    return (ps, t)
+  -- Const (i :>: sc) -> do
+  --   (ps :=> t) <- freshInst sc
+  --   return (ps, t)
+
+  Int _ -> do
+    v <- newTVar Star
+    return ([IsIn "Num" v], v)
+  -- TODO: literal rewrite
+  -- return ([], tInteger)
+
+  -- For lambdas, turn `\x->e` into `let f x = e in f`
+  -- and typecheck that instead
+  Lambda a x -> do
+    n <- newIdNum
+    let tmpVar = "INVALIDVAR" <> show n
+    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl tmpVar [Binding [PVar a] x]])
+    (qs, t) <- tiExpr ce (as' ++ as) (Var tmpVar)
+    return (ps ++ qs, t)
+  App e f -> do
+    (ps, te) <- tiExpr ce as e
+    (qs, tf) <- tiExpr ce as f
+    t <- newTVar Star
+    unify (tf `fn` t) te
+    return (ps ++ qs, t)
+  Let n v e -> do
+    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl n [Binding [] v]])
+    (qs, t) <- tiExpr ce (as' ++ as) e
+    return (ps ++ qs, t)
+
+  -- tiExpr ce as (Let bg e)       = do (ps, as') <- tiBindGroup ce as bg
+  --                                    (qs, t)   <- tiExpr ce (as' ++ as) e
+  --                                    return (ps ++ qs, t)
+  _ -> do
+    return ([], tDouble)
+
+tiBinding :: Infer Binding Type
+tiBinding ce as (Binding pats e) = do
+  (ps, as', ts) <- tiPats pats
+  (qs, t) <- tiExpr ce (as' ++ as) e
+  return (ps ++ qs, foldr fn t ts)
+
+tiBindings :: ClassEnv -> [Assump] -> [Binding] -> Type -> TI [Pred]
+tiBindings ce as bindings t = do
+  psts <- mapM (tiBinding ce as) bindings
+  mapM_ (unify t . snd) psts
+  return (concatMap fst psts)
+
+-- Let bg e -> do
+--   (ps, as') <- tiBindGroup ce as bg
+--   (qs, t) <- tiExpr ce (as' ++ as) e
+--   return (ps ++ qs, t)
+
+tiPat :: Pat -> TI ([Pred], [Assump], Type)
+tiPat (PVar i) = do
+  v <- newTVar Star
+  return ([], [i :>: toScheme v], v)
+
+tiPats :: [Pat] -> TI ([Pred], [Assump], [Type])
+tiPats pats = do
+  psasts <- mapM tiPat pats
+  let ps = concat [ps' | (ps', _, _) <- psasts]
+      as = concat [as' | (_, as', _) <- psasts]
+      ts = [t | (_, _, t) <- psasts]
+  return (ps, as, ts)
+
+tiBindGroup :: Infer BindGroup [Assump]
+tiBindGroup ce as (BindGroup es iss) = do
+  let as' = [v :>: sc | (Expl v sc alts) <- es]
+  (ps, as'') <- tiImpls ce (as' ++ as) iss
+  qss <- mapM (tiExpl ce (as'' ++ as' ++ as)) es
+  return (ps ++ concat qss, as'' ++ as')
+
+tiExpl :: ClassEnv -> [Assump] -> Expl -> TI [Pred]
+tiExpl ce as (Expl i sc alts) =
+  do
+    (qs :=> t) <- freshInst sc
+    ps <- tiBindings ce as alts t
+    s <- getSubst
+    let qs' = apply s qs
+        t' = apply s t
+        fs = tv (apply s as)
+        gs = tv t' \\ fs
+        sc' = quantify gs (qs' :=> t')
+        ps' = filter (not . entail ce qs') (apply s ps)
+    (ds, rs) <- split ce fs gs ps'
+    if sc /= sc'
+      then fail "signature too general"
+      else
+        if not (null rs)
+          then fail "context too weak"
+          else return ds
+
+restricted :: [Impl] -> Bool
+restricted = any simple
   where
-    sc = generalize emptyTyenv (apply sub ty)
+    simple (Impl i alts) = any (null . bindingPatterns) alts
 
-initUnique :: Unique
-initUnique = Unique {count = 0}
+tiImpls :: Infer [Impl] [Assump]
+tiImpls ce as bs = do
+  ts <- mapM (\_ -> newTVar Star) bs
+  let is = map implName bs
+      scs = map toScheme ts
+      as' = zipWith (:>:) is scs ++ as
+      altss = map implBindings bs
+  pss <- sequence (zipWith (tiBindings ce as') altss ts)
+  s <- getSubst
+  let ps' = apply s (concat pss)
+      ts' = apply s ts
+      fs = tv (apply s as)
+      vss = map tv ts'
+      gs = foldr1 union vss \\ fs
+  (ds, rs) <- split ce fs (foldr1 intersect vss) ps'
+  if restricted bs
+    then
+      let gs' = gs \\ tv rs
+          scs' = map (quantify gs' . ([] :=>)) ts'
+       in return (ds ++ rs, zipWith (:>:) is scs')
+    else
+      let scs' = map (quantify gs . (rs :=>)) ts'
+       in return (ds, zipWith (:>:) is scs')
 
-extend :: TypeEnv -> (Var, TypeScheme) -> TypeEnv
-extend (TypeEnv env) (x, s) = TypeEnv $ Map.insert x s env
+tiSeq :: Infer bg [Assump] -> Infer [bg] [Assump]
+tiSeq ti ce as [] = return ([], [])
+tiSeq ti ce as (bs : bss) = do
+  (ps, as') <- ti ce as bs
+  (qs, as'') <- tiSeq ti ce (as' ++ as) bss
+  return (ps ++ qs, as'' ++ as')
 
-emptyTyenv :: TypeEnv
-emptyTyenv = TypeEnv Map.empty
+--------------------------------------------------------------------------------
+split ::
+  MonadFail m =>
+  ClassEnv ->
+  [Tyvar] ->
+  [Tyvar] ->
+  [Pred] ->
+  m ([Pred], [Pred])
+split ce fs gs ps = do
+  ps' <- reduce ce ps
+  let (ds, rs) = partition (all (`elem` fs) . tv) ps'
+  rs' <- defaultedPreds ce (fs ++ gs) rs
+  return (ds, rs \\ rs')
 
-typeof :: TypeEnv -> Var -> Maybe TypeScheme
-typeof (TypeEnv env) name = Map.lookup name env
+candidates :: ClassEnv -> Ambiguity -> [Type]
+candidates ce (v, qs) =
+  [ t'
+    | let is = [i | IsIn i t <- qs]
+          ts = [t | IsIn i t <- qs],
+      all (TVar v ==) ts,
+      any (`elem` numClasses) is,
+      all (`elem` stdClasses) is,
+      t' <- defaults ce -- ,
+      -- all (entail ce []) [IsIn i t' | i <- is]
+  ]
 
-class Substitutable a where
-  apply :: Subst -> a -> a
-  ftv :: a -> Set.Set TVar
+stdClasses :: [Id]
+stdClasses =
+  [ "Eq",
+    "Ord",
+    "Show",
+    "Read",
+    "Bounded",
+    "Enum",
+    "Ix",
+    "Functor",
+    "Monad",
+    "MonadPlus"
+  ]
+    ++ numClasses
 
-instance Substitutable Type where
-  apply _ (TNamed a _) = TNamed a [] -- TODO: constructor
-  apply s t@(TVar a) = Map.findWithDefault t a s
-  apply s (t1 `TArrow` t2) = apply s t1 `TArrow` apply s t2
+type Ambiguity = (Tyvar, [Pred])
 
-  ftv TNamed {} = Set.empty
-  ftv (TVar a) = Set.singleton a
-  ftv (t1 `TArrow` t2) = ftv t1 `Set.union` ftv t2
+ambiguities :: ClassEnv -> [Tyvar] -> [Pred] -> [Ambiguity]
+ambiguities ce vs ps = [(v, filter (elem v . tv) ps) | v <- tv ps \\ vs]
 
-instance Substitutable TypeScheme where
-  apply s (ForAll as t) = ForAll as $ apply s' t
-    where
-      s' = foldr Map.delete s as
-  ftv (ForAll as t) = ftv t `Set.difference` Set.fromList as
+numClasses :: [Id]
+numClasses = ["Num", "Integral", "Floating", "Fractional", "Real", "RealFloat", "RealFrac"]
 
-instance Substitutable a => Substitutable [a] where
-  apply = fmap . apply
-  ftv = foldr (Set.union . ftv) Set.empty
-
-instance Substitutable TypeEnv where
-  apply s (TypeEnv env) = TypeEnv $ Map.map (apply s) env
-  ftv (TypeEnv env) = ftv $ Map.elems env
-
-nullSubst :: Subst
-nullSubst = Map.empty
-
-compose :: Subst -> Subst -> Subst
-s1 `compose` s2 = Map.map (apply s1) s2 `Map.union` s1
-
-unify :: Type -> Type -> Infer Subst
-unify (l `TArrow` r) (l' `TArrow` r') = do
-  s1 <- unify l l'
-  s2 <- unify (apply s1 r) (apply s1 r')
-  return (s2 `compose` s1)
-unify (TVar a) t = bind a t
-unify t (TVar a) = bind a t
-unify (TNamed a _) (TNamed b _) | a == b = return nullSubst -- TODO: constructor
-unify t1 t2 = throwError $ UnificationFail t1 t2
-
-bind :: TVar -> Type -> Infer Subst
-bind a t
-  | t == TVar a = return nullSubst
-  -- | occursCheck a t = throwError $ InfiniteType a t -- TODO: infinite type!
-  | otherwise = return $ Map.singleton a t
-
-occursCheck :: Substitutable a => TVar -> a -> Bool
-occursCheck a t = a `Set.member` ftv t
-
-letters :: [String]
-letters = [1 ..] >>= flip replicateM ['a' .. 'z']
-
-fresh :: Infer Type
-fresh = do
-  s <- get
-  put s {count = count s + 1}
-  return $ TVar (letters !! count s)
-
-instantiate :: TypeScheme -> Infer Type
-instantiate (ForAll as t) = do
-  as' <- mapM (const fresh) as
-  let s = Map.fromList $ zip as as'
-  return $ apply s t
-
-generalize :: TypeEnv -> Type -> TypeScheme
-generalize env t = ForAll as t
+withDefaults ::
+  MonadFail m =>
+  ([Ambiguity] -> [Type] -> a) ->
+  ClassEnv ->
+  [Tyvar] ->
+  [Pred] ->
+  m a
+withDefaults f ce vs ps
+  | any null tss = trace (show ce) $ fail "cannot resolve ambiguity"
+  | otherwise = return (f vps (map head tss))
   where
-    as = Set.toList $ ftv t `Set.difference` ftv env
+    vps = ambiguities ce vs ps
+    tss = map (candidates ce) vps
 
--- ops :: Binop -> Type
--- ops Add = typeInt `TArr` typeInt `TArr` typeInt
--- ops Mul = typeInt `TArr` typeInt `TArr` typeInt
--- ops Sub = typeInt `TArr` typeInt `TArr` typeInt
--- ops Eql = typeInt `TArr` typeInt `TArr` typeBool
+defaultedPreds :: MonadFail m => ClassEnv -> [Tyvar] -> [Pred] -> m [Pred]
+defaultedPreds = withDefaults (\vps ts -> concatMap snd vps)
 
-lookupEnv :: TypeEnv -> Var -> Infer (Subst, Type)
-lookupEnv (TypeEnv env) x =
-  case Map.lookup x env of
-    Nothing -> throwError $ UnboundVariable (show x)
-    Just s -> do
-      t <- instantiate s
-      return (nullSubst, t)
+defaultSubst :: MonadFail m => ClassEnv -> [Tyvar] -> [Pred] -> m Subst
+defaultSubst ce ts ps = withDefaults (zip . map fst) ce ts ps
 
-infer :: TypeEnv -> Exp -> Infer (Subst, Type)
-infer env ex = case ex of
-  Var x -> lookupEnv env x
-  --
-  Lambda x e -> do
-    tv <- fresh
-    let env' = env `extend` (x, ForAll [] tv)
-    (s1, t1) <- infer env' e
-    return (s1, apply s1 tv `TArrow` t1)
-  --
-  App e1 e2 -> do
-    tv <- fresh
-    (s1, t1) <- infer env e1
-    (s2, t2) <- infer (apply s1 env) e2
-    s3       <- unify (apply s2 t1) (TArrow t2 tv)
-    return (s3 `compose` s2 `compose` s1, apply s3 tv)
-  --
-  Let x e1 e2 -> do
-    t0 <- fresh
-    (s1, t1) <- infer (env `extend` (x, ForAll [] t0)) e1
-    let env' = apply s1 env
-        t'   = generalize env' t1
-    (s2, t2) <- infer (env' `extend` (x, t')) e2
-    return (s2 `compose` s1, t2)
-
-  IfElse cond tr fl -> do
-    tv <- fresh
-    inferPrim env [cond, tr, fl] (tInt `TArrow` tv `TArrow` tv `TArrow` tv)
-  --
-  -- Fix e1 -> do
-  --   tv <- fresh
-  --   inferPrim env [e1] ((tv `TArr` tv) `TArr` tv)
-
-  -- Op op e1 e2 -> do
-  --   inferPrim env [e1, e2] (ops op)
-
-  (Int _)  -> return (nullSubst, tInt)
-  -- Lit (LBool _) -> return (nullSubst, typeBool)
-  _ -> return (nullSubst, tInt)
-
-inferPrim :: TypeEnv -> [Exp] -> Type -> Infer (Subst, Type)
-inferPrim env l t = do
-  tv <- fresh
-  (s1, tf) <- foldM inferStep (nullSubst, id) l
-  s2 <- unify (apply s1 (tf tv)) t
-  return (s2 `compose` s1, apply s2 tv)
-  where
-    inferStep (s, tf) exp = do
-      (s', t) <- infer (apply s env) exp
-      return (s' `compose` s, tf . TArrow t)
-
-inferExpr :: TypeEnv -> Exp -> Either TypeError TypeScheme
-inferExpr env = runInfer . infer env
-
-inferTop :: TypeEnv -> [(String, Exp)] -> Either TypeError TypeEnv
-inferTop env [] = Right env
-inferTop env ((name, ex) : xs) = case inferExpr env ex of
-  Left err -> Left err
-  Right ty -> inferTop (extend env (name, ty)) xs
-
-normalize :: TypeScheme -> TypeScheme
-normalize (ForAll ts body) = ForAll (fmap snd ord) (normtype body)
-  where
-    ord = zip (nub $ fv body) letters
-
-    fv (TVar a) = [a]
-    fv (TArrow a b) = fv a ++ fv b
-    fv (TNamed _ []) = [] -- TODO: constructors!
-    normtype (TArrow a b) = TArrow (normtype a) (normtype b)
-    normtype (TNamed a _) = TNamed a [] -- TODO: constructors!
-    normtype (TVar a) =
-      case lookup a ord of
-        Just x -> TVar x
-        Nothing -> error "type variable not in signature"
+tiProgram :: ClassEnv -> [Assump] -> Program -> [Assump]
+tiProgram ce as bindGroups = runTI $
+  do
+    (ps, as') <- tiSeq tiBindGroup ce as bindGroups
+    -- (ps, as') <- tiSeq tiBindGroup ce as' bindGroups
+    s <- getSubst
+    rs <- reduce ce (apply s ps)
+    -- let rs = apply s ps -- TODO: I removed reduction. Do that!
+    s' <- defaultSubst ce [] rs
+    -- return (apply (s' @@ s) as')
+    return (reverse (apply (s' @@ s) as'))

@@ -103,13 +103,16 @@ typeParameters : simpleType                   { [$1] }
 -- A simpleType is a type that is either a single name, or
 -- a complex type wrapped in parens
 -- (arrows are not simple types)
-simpleType : tname                { T.TNamed $1 [] } 
-           | tvar                 { T.TVar (tail $1) }
+simpleType : tname                { T.TCon (T.Tycon $1 T.Star) } 
+           | tvar                 { T.TVar (T.Tyvar (tail $1) T.Star) }
            | '(' type ')'         { $2 }
 
-type : simpleType                 { $1 }
-     | type arr type              { T.TArrow $1 $3 }
-     | tname typeParameters       { T.TNamed $1 $2 }
+type : simpleType                 { $1 } -- T.TCon (T.Tycon $1 T.Star) }
+     | tApp                       { $1 }
+     | type arr type              { T.fn $1 $3 }
+
+tApp : simpleType                 { $1 }
+     | tApp simpleType            { T.TAp $1 $2 }
 
 {
 
