@@ -135,25 +135,43 @@ type Infer e t = ClassEnv -> [Assump] -> e -> TI ([Pred], t)
 -- Next we describe type inference for expressions, represented by the Expr datatype:
 tiExpr :: Infer Exp Type
 tiExpr ce as e = case e of
+  -- Var ('$' : _) -> do
+  --   t <- newTVar Star
+  --   return ([], t)
+  -- sc <- Futz.Types.find i as
+  -- (ps :=> t) <- freshInst sc
+  -- return (ps, t)
+
   Var i -> do
     sc <- Futz.Types.find i as
     (ps :=> t) <- freshInst sc
     return (ps, t)
+
+  -- Var i ->
+  --   if "$" `isPrefixOf` i
+  --     then do
+  --       t <- newTVar Star
+  --       return ([], t)
+  --     else do
+  --       sc <- Futz.Types.find i as
+  --       (ps :=> t) <- freshInst sc
+  --       return (ps, t)
+
   -- Const (i :>: sc) -> do
   --   (ps :=> t) <- freshInst sc
   --   return (ps, t)
 
-  Int _ -> do
-    v <- newTVar Star
-    return ([IsIn "Num" v], v)
-  -- TODO: literal rewrite
-  -- return ([], tInteger)
+  Lit (LitInt _) -> do
+    -- v <- newTVar Star
+    -- return ([IsIn "Num" v], v)
+    -- TODO: literal rewrite
+    return ([], tInt)
 
   -- For lambdas, turn `\x->e` into `let f x = e in f`
   -- and typecheck that instead
   Lambda a x -> do
     n <- newIdNum
-    let tmpVar = "INVALIDVAR" <> show n
+    let tmpVar = "$INVALIDVAR" <> show n
     (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl tmpVar [Binding [PVar a] x]])
     (qs, t) <- tiExpr ce (as' ++ as) (Var tmpVar)
     return (ps ++ qs, t)
@@ -168,6 +186,8 @@ tiExpr ce as e = case e of
     (qs, t) <- tiExpr ce (as' ++ as) e
     return (ps ++ qs, t)
 
+  -- Infix syntax is just a magic version of apply
+  Inf op l r -> tiExpr ce as (App (App (Var op) l) r)
   -- tiExpr ce as (Let bg e)       = do (ps, as') <- tiBindGroup ce as bg
   --                                    (qs, t)   <- tiExpr ce (as' ++ as) e
   --                                    return (ps ++ qs, t)
@@ -212,7 +232,7 @@ tiBindGroup ce as (BindGroup es iss) = do
   return (ps ++ concat qss, as'' ++ as')
 
 tiExpl :: ClassEnv -> [Assump] -> Expl -> TI [Pred]
-tiExpl ce as (Expl i sc alts) =
+tiExpl ce as ex@(Expl i sc alts) =
   do
     (qs :=> t) <- freshInst sc
     ps <- tiBindings ce as alts t
@@ -225,7 +245,7 @@ tiExpl ce as (Expl i sc alts) =
         ps' = filter (not . entail ce qs') (apply s ps)
     (ds, rs) <- split ce fs gs ps'
     if sc /= sc'
-      then fail "signature too general"
+      then fail ("signature too general" <> show ex <> " sc:" <> show sc <> " sc':" <> show sc')
       else
         if not (null rs)
           then fail "context too weak"
@@ -345,5 +365,4 @@ tiProgram ce as bindGroups = runTI $
     rs <- reduce ce (apply s ps)
     -- let rs = apply s ps -- TODO: I removed reduction. Do that!
     s' <- defaultSubst ce [] rs
-    -- return (apply (s' @@ s) as')
     return (reverse (apply (s' @@ s) as'))

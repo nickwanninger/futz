@@ -64,20 +64,13 @@ instance Show Tyvar where
 instance Show Tycon where
   show (Tycon id _) = id
 
-data TypeScheme = ForAll [TVar] Type
-  deriving (Eq, Ord)
-
-instance Show TypeScheme where
-  show (ForAll [] t) = "∀ . " <> show t
-  show (ForAll vars t) = "∀" <> intercalate "" vars <> " . " <> show t
-
 tUnit = TCon (Tycon "()" Star)
 
 tChar = TCon (Tycon "Char" Star)
 
 tInt = TCon (Tycon "Int" Star)
 
-tInteger = TCon (Tycon "Integer" Star)
+-- tInteger = TCon (Tycon "Integer" Star)
 
 tFloat = TCon (Tycon "Float" Star)
 
@@ -189,14 +182,24 @@ mgu (TVar u) t = varBind u t
 mgu t (TVar u) = varBind u t
 mgu (TCon tc1) (TCon tc2)
   | tc1 == tc2 = return nullSubst
-  | otherwise = fail "Unknown constant type unification"
-mgu a b = fail "types do not unify"
+  | otherwise = fail ("Unknown constant type unification: " <> show tc1 <> " and " <> show tc2)
+mgu a b =
+  fail $
+    unlines
+      [ "[ERROR] Could not unify: " <> show a,
+        "                    and: " <> show b
+      ]
 
 varBind :: MonadFail m => Tyvar -> Type -> m Subst
 varBind u t
   | t == TVar u = return nullSubst
   -- \| u `elem` tv t = fail "occurs check fails"
-  | kind u /= kind t = fail "kinds do not match"
+  | kind u /= kind t =
+      fail $
+        unlines
+          [ "Kinds do not match between: " <> show u <> " of kind " <> show (kind u),
+            "                       and: " <> show t <> " of kind " <> show (kind t)
+          ]
   | otherwise = return (u +-> t)
 
 -- matching is closely related to unification. Given two types t1, t2, the goal is
@@ -313,7 +316,6 @@ insts ce i = case classes ce i of
   Just (Class _ is its) -> its
   Nothing -> []
 
-
 -- These functions are intended to be used only in cases where it
 -- is known that the class i is defined in the environment ce. In
 -- some cases, this condition might be guaranteed by static analysis
@@ -337,7 +339,7 @@ initialEnv :: ClassEnv
 initialEnv =
   ClassEnv
     { classMap = Map.empty,
-      defaults = [tInteger, tDouble]
+      defaults = [tInt, tDouble]
     }
 
 -- As we process each class or instance declaration in a program,
@@ -633,7 +635,11 @@ scEntail ce ps p = any ((p `elem`) . bySuper ce) ps
 -- Type schemes are used to describe polymorphic types, and are represented using a list of
 -- kinds and a qualified type:
 data Scheme = Forall [Kind] (Qual Type)
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show Scheme where
+  show (Forall [] t) = show t
+  show (Forall ks t) = "∀{" <> intercalate "," (map show ks) <> "} " <> show t
 
 -- There is no direct equivalent of Forall in the syntax of Haskell. Instead, implicit
 -- quantifiers are inserted as necessary to bind free type variables.
@@ -691,7 +697,10 @@ toScheme t = Forall [] ([] :=> t)
 -- Assumptions about the type of a variable are represented by values of the Assump datatype,
 -- each of which pairs a variable with a type scheme
 data Assump = Id :>: Scheme
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show Assump where
+  show (id :>: sc) = id <> " :: " <> show sc
 
 -- Once again, we can extend the Types class to allow the application of a
 -- substitution to an assumption:
@@ -706,6 +715,7 @@ instance Types Assump where
 find :: MonadFail m => Id -> [Assump] -> m Scheme
 find i [] = fail ("unbound identifier: " ++ i)
 find i ((i' :>: sc) : as) = if i == i' then return sc else find i as
+
 -- This definition allows for the possibility that the variable i might not appear in as.
 -- In practice, occurrences of unbound variables will probably have been detected in earlier
 -- compiler passes.

@@ -10,8 +10,8 @@ import qualified Data.Set as Set
 import Debug.Trace
 import Futz.Infer
 import qualified Futz.Lexer as L
+import qualified Futz.Module as Module
 import qualified Futz.Parser as P
-import qualified Futz.Printer as PR
 import Futz.Syntax
 import Futz.Types
 import System.Environment
@@ -19,6 +19,8 @@ import System.Exit
 import System.IO
 import System.Process
 import Text.Pretty.Simple (pPrint)
+
+import qualified Data.Text as Text
 
 -- temporary helper!
 parseType :: String -> Type
@@ -32,32 +34,32 @@ parseType s = case L.scanTokens ("s :: " <> s) of
 
 main = do
   args <- getArgs
-  case args of
+  case map Text.pack args of
     [file] -> do
-      handle <- openFile file ReadMode
-      contents <- hGetContents handle
-      -- putStrLn contents
-      let lexRes = L.scanTokens contents
-      case lexRes of
-        Left err -> putStrLn err
-        Right tokens -> do
-          -- let t1 = parseType "'a0 -> 'a1"
-          -- let t2 = parseType "('b -> 'c) -> ('a -> 'b) -> 'a -> 'c"
-          -- print (quantify [tyvar "a0"] ([] :=> t1))
-          -- return ()
-          let ast = P.parseFutz tokens
-          let prog = toProgram ast
-          let env = exampleInsts initialEnv
-          case env of
-            Nothing -> print "fail!"
-            Just env -> do
-              let as = initialAssumptions ast
-              putStrLn "\nInitial:"
-              mapM_ print as
-              -- putStrLn "\nInferring:"
-              let as' = tiProgram env as prog
-              putStrLn "\nNew Inferrence:"
-              mapM_ print as'
+      mod <- Module.load file
+      pPrint mod
+    -- handle <- openFile file ReadMode
+    -- contents <- hGetContents handle
+    -- -- putStrLn contents
+    -- let lexRes = L.scanTokens contents
+    -- case lexRes of
+    --   Left err -> putStrLn err
+    --   Right tokens -> do
+    --     -- mapM_ print tokens
+    --     let ast = P.parseFutz tokens
+    --     mapM_ print ast
+    --     let prog = fuseProgram ast
+    --     let env = exampleInsts initialEnv
+    --     case env of
+    --       Nothing -> print "fail!"
+    --       Just env -> do
+    --         let as = initialAssumptions ast
+    --         putStrLn "\nInitial:"
+    --         print prog
+    --         -- putStrLn "\nInferring:"
+    --         let as' = tiProgram env [] [prog]
+    --         putStrLn "\nNew Inferrence:"
+    --         mapM_ print as'
     _ -> putStrLn "Usage: futz <prog.futz>"
 
 dumbScheme :: Type -> Scheme

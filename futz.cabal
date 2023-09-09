@@ -8,14 +8,18 @@ cabal-version:       >=1.10
 Executable futz
   hs-source-dirs:      src
   main-is:             Main.hs
-  other-modules:       Futz.Lexer Futz.Parser Futz.Printer Futz.Syntax Futz.Types
+  other-modules:       Futz.Lexer
+                       Futz.Parser
+                       Futz.Syntax
+                       Futz.Module
+                       Futz.Types
                        Futz.Infer
-                       -- Futz.TypeCheck Futz.Infer
 
   build-depends:       base, array, containers, process, text, mtl,
                        monad-st,
                        pretty-simple==4.1.2.0,
-                       bytestring >= 0.11.4.0
+                       bytestring >= 0.11.4.0,
+                       lens==5.2.3
   build-tools:         alex==3.4.0.0, happy
   default-language:    Haskell2010
   ghc-options:	       -Wno-unused-imports

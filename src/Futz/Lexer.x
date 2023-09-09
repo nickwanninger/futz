@@ -22,7 +22,7 @@ $unisymbol = [] -- TODO
 $symbol    = [$ascsymbol $unisymbol] # [$special \_\:\"\']
 
 @syntax = 
-	let|in|of|if|then|else
+	let|in|of|if|then|else|data
 
 $large     = [A-Z \xc0-\xd6 \xd8-\xde]
 $small     = [a-z \xdf-\xf6 \xf8-\xff \_]
@@ -36,10 +36,10 @@ tokens :-
   @syntax                       { mkL LSyntax }
   $digit+                       { mkL LInt }
   \=                            { mkL LEq }
-  \+                            { mkL LPlus }
-  \-                            { mkL LMinus }
-  \*                            { mkL LTimes }
-  \/                            { mkL LDiv }
+  -- \+                            { mkL LPlus }
+  -- \-                            { mkL LMinus }
+  -- \*                            { mkL LTimes }
+  -- \/                            { mkL LDiv }
   \(                            { mkL LLParen }
   \)                            { mkL LRParen }
   \->                           { mkL LArrow }
@@ -48,8 +48,11 @@ tokens :-
   \\                            { mkL LLambda }
   \::                           { mkL LIsType }
   $small $idchar*               { mkL LSym }
+  $ascsymbol $ascsymbol*        { mkL LOp }
   $large $idchar*               { mkL LType }
   ' $small $idchar*             { mkL LTypeVar }
+  -- TODO: remove this! This is for native calls
+  \$ $small $idchar*            { mkL LSym }
 
 {
   

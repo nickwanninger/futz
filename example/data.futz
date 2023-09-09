@@ -1,0 +1,6 @@
+-- Possibly the most simple ADT: Maybe
+-- data Maybe 'a = Just 'a | Nothing
+
+
+-- something :: 'a -> 'a
+something = \x -> 4
