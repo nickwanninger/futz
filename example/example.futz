@@ -2,28 +2,38 @@
 -- addTest = let add = \x y -> x + y in add 1 2
 -- idTest = (\x -> x) 42
 -- dumbLet = let x = 42 in x
+-- (+) :: Int -> Int -> Int
+
+-- (+) = \x y -> $add x y
+
+-- (+) :: Int -> Int -> Int
+-- (-) :: Int -> Int -> Int
+-- (*) :: Int -> Int -> Int
+-- (/) :: Int -> Int -> Int
+
+-- data Maybe 'a = Just 'a | Nothing
+
+$add :: Int -> Int -> Int
+(+) = \a b -> $add a b
+
+$sub :: Int -> Int -> Int
+(-) = \a b -> $sub a b
 
 
--- apply = let apply = \f x -> f of x in apply (λx -> 1)
+$mul :: Int -> Int -> Int
+(*) = \a b -> $mul a b
 
--- fib = let fib = \n -> if n then n else fib (n * 1) + fib (n * 2) in fib
--- add = let add = \x -> if x then x + 1 else x in add
+$div :: Int -> Int -> Int
+(/) = \a b -> $div a b
 
-box :: 'a -> Box 'a
-
-unbox :: Box 'a -> 'a
--- unbox = \x -> 1
-foo = compose unbox -- unbox
+flip = \f x y -> f y x
+foo = \x -> x + 4
 
 
 -- compose :: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
-compose = λf g x -> f of g x
-
--- y = λf -> (λx -> f (x x)) (λx -> (f(x x)))
--- fix = \f -> let x = f x in x
--- compose :: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
--- foo = compose foo -- compose compose
 -- compose = λf g x -> f of g x
--- id = compose id id
--- four = 4
+-- (.) = compose
+(>>=) :: 'm 'a -> ('a -> 'm 'b) -> 'm 'b
+just :: 'a -> Maybe 'a
+something = \f -> f >>= (\x -> just 4)
 
