@@ -37,7 +37,8 @@ main = do
   case map Text.pack args of
     [file] -> do
       mod <- Module.load file
-      pPrint mod
+      -- print mod
+      return ()
     -- handle <- openFile file ReadMode
     -- contents <- hGetContents handle
     -- -- putStrLn contents

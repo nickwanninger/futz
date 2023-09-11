@@ -1,5 +1,0 @@
-y = λf -> ((λx -> (f (x x))) (λx -> (f (x x))))
-
-comb = let k = λx y -> x
-        in let s = λxyz -> (x z) (y z)
-           in s k s k

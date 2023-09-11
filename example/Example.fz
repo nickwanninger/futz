@@ -27,13 +27,16 @@ $div :: Int -> Int -> Int
 (/) = \a b -> $div a b
 
 flip = \f x y -> f y x
-foo = \x -> x + 4
+-- foo = \x -> x + 4
+
+eq :: 'a -> 'a -> Bool
 
 
 -- compose :: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
 -- compose = λf g x -> f of g x
 -- (.) = compose
-(>>=) :: 'm 'a -> ('a -> 'm 'b) -> 'm 'b
-just :: 'a -> Maybe 'a
-something = \f -> f >>= (\x -> just 4)
+-- (>>=) :: 'm 'a -> ('a -> 'm 'b) -> 'm 'b
+-- just :: 'a -> Maybe 'a
+-- something = \f -> f >>= (\x -> just 4)
 
+foo = \c x y -> if c then x + y else y

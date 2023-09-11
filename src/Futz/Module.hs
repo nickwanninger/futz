@@ -39,13 +39,13 @@ load name = do
     -- If the tokenization works, parse the AST
     Right tokens -> do
       let ast = Parser.parseFutz tokens
-      mapM_ print ast
+      -- mapM_ print ast
       let bindings = Syntax.fuseProgram ast
       let env = exampleInsts initialEnv
       case env of
         Just env -> do
           let as = initialAssumptions ast
-          print bindings
+          -- print bindings
           let as' = Infer.tiProgram env [] [bindings]
           mapM_ print as'
           return $ Just Module {name = name, ast = ast, bindings = bindings}

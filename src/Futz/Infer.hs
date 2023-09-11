@@ -131,41 +131,44 @@ instance Instantiate Pred where
 -- variants of the following synonym:
 type Infer e t = ClassEnv -> [Assump] -> e -> TI ([Pred], t)
 
+class Inferrable e where
+  infer :: Infer e Type
+
 -- Expressions
 -- Next we describe type inference for expressions, represented by the Expr datatype:
 tiExpr :: Infer Exp Type
 tiExpr ce as e = case e of
-  -- Var ('$' : _) -> do
-  --   t <- newTVar Star
-  --   return ([], t)
-  -- sc <- Futz.Types.find i as
-  -- (ps :=> t) <- freshInst sc
-  -- return (ps, t)
 
+  -- let, supporting rec
+  Let n v e -> do
+    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl n [Binding [] v]])
+    (qs, t) <- tiExpr ce (as' ++ as) e
+    return (ps ++ qs, t)
+
+  Lit (LitInt _) -> do
+    -- v <- newTVar Star
+    -- return ([IsIn "Num" v], v)
+    return ([], tInt)
+
+  -- variable inference is just a lookup
   Var i -> do
     sc <- Futz.Types.find i as
     (ps :=> t) <- freshInst sc
     return (ps, t)
 
-  -- Var i ->
-  --   if "$" `isPrefixOf` i
-  --     then do
-  --       t <- newTVar Star
-  --       return ([], t)
-  --     else do
-  --       sc <- Futz.Types.find i as
-  --       (ps :=> t) <- freshInst sc
-  --       return (ps, t)
 
-  -- Const (i :>: sc) -> do
-  --   (ps :=> t) <- freshInst sc
-  --   return (ps, t)
+  IfElse tst thn els -> do
+    (psTst, tTst) <- tiExpr ce as tst
+    (psThn, tThn) <- tiExpr ce as thn
+    (psEls, tEls) <- tiExpr ce as els
+    -- The "test" value of the if-else must be a Bool
+    unify tBool tTst
 
-  Lit (LitInt _) -> do
-    -- v <- newTVar Star
-    -- return ([IsIn "Num" v], v)
-    -- TODO: literal rewrite
-    return ([], tInt)
+    t <- newTVar Star
+    unify tThn t
+    unify tEls t
+    return (psTst ++ psThn ++ psEls, tEls)
+
 
   -- For lambdas, turn `\x->e` into `let f x = e in f`
   -- and typecheck that instead
@@ -175,24 +178,19 @@ tiExpr ce as e = case e of
     (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl tmpVar [Binding [PVar a] x]])
     (qs, t) <- tiExpr ce (as' ++ as) (Var tmpVar)
     return (ps ++ qs, t)
+  -- Simple appication
   App e f -> do
     (ps, te) <- tiExpr ce as e
     (qs, tf) <- tiExpr ce as f
     t <- newTVar Star
     unify (tf `fn` t) te
     return (ps ++ qs, t)
-  Let n v e -> do
-    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl n [Binding [] v]])
-    (qs, t) <- tiExpr ce (as' ++ as) e
-    return (ps ++ qs, t)
 
   -- Infix syntax is just a magic version of apply
   Inf op l r -> tiExpr ce as (App (App (Var op) l) r)
-  -- tiExpr ce as (Let bg e)       = do (ps, as') <- tiBindGroup ce as bg
-  --                                    (qs, t)   <- tiExpr ce (as' ++ as) e
-  --                                    return (ps ++ qs, t)
-  _ -> do
-    return ([], tDouble)
+  -- -- Everything else is a double, for now. TODO: fix this!
+  -- _ -> do
+  --   return ([], tDouble)
 
 tiBinding :: Infer Binding Type
 tiBinding ce as (Binding pats e) = do
@@ -205,11 +203,6 @@ tiBindings ce as bindings t = do
   psts <- mapM (tiBinding ce as) bindings
   mapM_ (unify t . snd) psts
   return (concatMap fst psts)
-
--- Let bg e -> do
---   (ps, as') <- tiBindGroup ce as bg
---   (qs, t) <- tiExpr ce (as' ++ as) e
---   return (ps ++ qs, t)
 
 tiPat :: Pat -> TI ([Pred], [Assump], Type)
 tiPat (PVar i) = do

@@ -1,0 +1,8 @@
+-- y = λf -> ((λx -> (f (x x))) (λx -> (f (x x))))
+
+-- unwrap :: Maybe 'a -> 'a
+
+comb = let k = λx y -> x
+        in let s = λx y z -> (x z) (y z)
+           in s
+

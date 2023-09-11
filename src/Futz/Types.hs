@@ -71,6 +71,7 @@ tChar = TCon (Tycon "Char" Star)
 tInt = TCon (Tycon "Int" Star)
 
 -- tInteger = TCon (Tycon "Integer" Star)
+tBool = TCon (Tycon "Bool" Star)
 
 tFloat = TCon (Tycon "Float" Star)
 
