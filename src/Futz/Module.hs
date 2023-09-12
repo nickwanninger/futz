@@ -1,5 +1,6 @@
 module Futz.Module where
 
+import Data.Either.Combinators
 import Data.Text
 import qualified Futz.Infer as Infer
 import qualified Futz.Lexer as Lexer
@@ -16,7 +17,7 @@ data Module = Module
     -- The raw AST, in case it's useful to have it around
     ast :: [Syntax.TopLevel],
     -- Bindings
-    bindings :: Syntax.BindGroup
+    program :: Syntax.Program
   }
   deriving (Eq, Show)
 
@@ -38,26 +39,46 @@ load name = do
       return Nothing
     -- If the tokenization works, parse the AST
     Right tokens -> do
+      -- print tokens
+      mapM_ print tokens
       let ast = Parser.parseFutz tokens
-      -- mapM_ print ast
-      let bindings = Syntax.fuseProgram ast
+
+      -- let tops = [v | t@(Syntax.Decl _ v) <- ast]
+      -- putStrLn "Before:"
+      -- mapM_ print tops
+      -- tops' <- mapM (Syntax.visitExp visit) tops
+      -- putStrLn "After:"
+      -- mapM_ print tops'
+      let program = Syntax.fuseProgram ast
+      -- putStrLn "Program:"
+      -- print program
       let env = exampleInsts initialEnv
       case env of
-        Just env -> do
-          let as = initialAssumptions ast
-          -- print bindings
-          let as' = Infer.tiProgram env [] [bindings]
-          mapM_ print as'
-          return $ Just Module {name = name, ast = ast, bindings = bindings}
-        Nothing -> do
+        Left err -> do
+          putStrLn "Fatal error. Could not setup initial environment!"
           return Nothing
+        Right env -> do
+          print env
+          let as = initialAssumptions ast
+          case Infer.tiProgram env [] [program] of
+            Left tErr -> do
+              print ("Type Error: " <> show tErr)
+              return Nothing
+            Right as' -> do
+              putStrLn "\n\nType Inference:"
+              mapM_ print as'
+              return $ Just Module {name = name, ast = ast, program = program}
 
-dumbScheme :: Type -> Scheme
-dumbScheme t = quantify (tv t) ([] :=> t)
+visit :: Syntax.Exp a -> IO (Syntax.Exp a)
+visit (Syntax.App ann l r) = return (Syntax.App ann r l)
+visit e = return e
+
+dumbScheme :: Qual Type -> Scheme
+dumbScheme t = quantify (tv t) t
 
 initialAssumptions :: [Syntax.TopLevel] -> [Assump]
 initialAssumptions (v@(Syntax.Decl name val) : tls) = a : initialAssumptions tls
   where
-    a = name :>: dumbScheme (TVar (tyvar "a"))
+    a = name :>: dumbScheme ([] :=> TVar (tyvar "a"))
 initialAssumptions (v@(Syntax.TypeDecl name t) : ts) = (name :>: dumbScheme t) : initialAssumptions ts
 initialAssumptions [] = []

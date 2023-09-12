@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Use zipWithM" #-}
@@ -6,68 +7,62 @@ module Futz.Infer where
 
 import Control.Applicative -- Otherwise you can't do the Applicative instance.
 import Control.Monad (ap, liftM)
+import Control.Monad.Except
+import Control.Monad.State
 import Data.List
 import Debug.Trace
 import Futz.Syntax
 import Futz.Types
 
--------------------------------------------------------------------------------
---
---
---
+
+
+data Expl = Expl Var Scheme [Binding]
+  deriving (Eq, Show)
+data Impl = Impl Var [Binding]
+  deriving (Eq, Show)
+
+implName (Impl v _) = v
+implBindings (Impl _ as) = as
 --
 --   A Type Inference Monad
---
--- It is now quite standard to use monads as a way to hide certain aspects of “plumbing”
--- and to draw attention instead to more important aspects of a program's design [Wadler, 1992].
--- The purpose of this section is to define the monad that will be used in the description of
--- the main type inference algorithm in Type Inference. Our choice of monad is motivated by the
--- needs of maintaining a “current substitution” and of generating fresh type variables during
--- typechecking. In a more realistic implementation, we might also want to add error reporting
--- facilities, but in this the crude but simple fail function from the Haskell prelude is
--- all that we require. It follows that we need a simple state monad with only a substitution
--- and an integer (from which we can generate new type variables) as its state:
-newtype TI a = TI (Subst -> Int -> (Subst, Int, a)) -- TODO: rewrite me as StateT!
+type TI a = ExceptT TypeError (State InferState) a
 
-instance Applicative TI where
-  pure x = TI (\s n -> (s, n, x))
-  (<*>) = ap
+-- type TI a = ExceptT InferState (State TypeError) a
 
-instance Functor TI where
-  fmap = liftM
+data InferState = InferState
+  { substs :: Subst,
+    nextId :: Int
+  }
+  deriving (Eq, Show)
 
-instance Monad TI where
-  return = pure -- TI (\s n -> (s, n, x))
-  TI f >>= g =
-    TI
-      ( \s n -> case f s n of
-          (s', m, x) ->
-            let TI gx = g x
-             in gx s' m
-      )
+defaultInferState = InferState {substs = nullSubst, nextId = 0}
 
-instance MonadFail TI where
-  fail s = trace s undefined -- TODO: how do we propegate errors?
 
-runTI :: TI a -> a
-runTI (TI f) = x where (s, n, x) = f nullSubst 0
+runTI :: TI a -> Either TypeError a
+runTI ti = evalState (runExceptT ti) defaultInferState
+
+-- evalState (runExceptT ti) defaultInferState
 
 -- The getSubst operation returns the current substitution, while unify extends it with a most
 -- general unifier of its arguments:
 
 getSubst :: TI Subst
-getSubst = TI (\s n -> (s, n, s))
+getSubst = do
+  (lift . gets) substs
 
 unify :: Type -> Type -> TI ()
 unify t1 t2 = do
   s <- getSubst
-  u <- mgu (apply s t1) (apply s t2)
+  u <- liftEither $ mgu (apply s t1) (apply s t2)
   extSubst u
 
 -- For clarity, we define the operation that extends the substitution as a separate function,
 -- even though it is used only here in the definition of unify:
 extSubst :: Subst -> TI ()
-extSubst s' = TI (\s n -> (s' @@ s, n, ()))
+extSubst s' = do
+  (lift . Control.Monad.State.modify) (\st -> st {substs = s' @@ substs st})
+
+-- TI (\s n -> (s' @@ s, n, ()))
 
 -- Overall, the decision to hide the current substitution in the TI monad makes the presentation
 -- of type inference much clearer. In particular, it avoids heavy use of apply every time an
@@ -78,12 +73,17 @@ extSubst s' = TI (\s n -> (s' @@ s, n, ()))
 --
 newIdNum :: TI Int
 newIdNum = do
-  TI (\s n -> (s, n + 1, n))
+  ps <- get
+  let id = nextId ps
+  put $ ps {nextId = id + 1}
+  return id
+
+-- TI (\s n -> (s, n + 1, n))
 
 newTVar :: Kind -> TI Type
 newTVar k = do
   n <- newIdNum
-  TI (\s n -> (s, n, TVar (Tyvar (enumId n) k)))
+  return $ TVar (Tyvar (enumId n) k)
 
 -- One place where newTVar is useful is in instantiating a type scheme
 -- with new type variables of appropriate kinds:
@@ -136,50 +136,48 @@ class Inferrable e where
 
 -- Expressions
 -- Next we describe type inference for expressions, represented by the Expr datatype:
-tiExpr :: Infer Exp Type
+tiExpr :: Infer (Exp SourceRange) Type
 tiExpr ce as e = case e of
-
   -- let, supporting rec
-  Let n v e -> do
-    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl n [Binding [] v]])
+  Let _ n v e -> do
+    (ps, as') <- tiDefinitions ce as [Definition n Nothing [Binding [] v]]
     (qs, t) <- tiExpr ce (as' ++ as) e
     return (ps ++ qs, t)
-
-  Lit (LitInt _) -> do
-    -- v <- newTVar Star
-    -- return ([IsIn "Num" v], v)
-    return ([], tInt)
+  Lit _ (LitInt _) -> do
+    v <- newTVar Star
+    return ([IsIn "Num" v], v)
+  -- return ([], tInt)
 
   -- variable inference is just a lookup
-  Var i -> do
-    sc <- Futz.Types.find i as
-    (ps :=> t) <- freshInst sc
-    return (ps, t)
+  Var _ i -> case Futz.Types.find i as of
+    Just sc -> do
+      (ps :=> t) <- freshInst sc
+      return (ps, t)
+    Nothing -> throwError $ TEGeneric ("Failed: variable " <> i <> " not bound")
 
-
-  IfElse tst thn els -> do
+  IfElse _ tst thn els -> do
     (psTst, tTst) <- tiExpr ce as tst
     (psThn, tThn) <- tiExpr ce as thn
     (psEls, tEls) <- tiExpr ce as els
     -- The "test" value of the if-else must be a Bool
     unify tBool tTst
 
+    -- Both arms of the if statement must be the same type.
     t <- newTVar Star
     unify tThn t
     unify tEls t
     return (psTst ++ psThn ++ psEls, tEls)
 
-
   -- For lambdas, turn `\x->e` into `let f x = e in f`
   -- and typecheck that instead
-  Lambda a x -> do
+  Lambda ann a x -> do
     n <- newIdNum
     let tmpVar = "$INVALIDVAR" <> show n
-    (ps, as') <- tiBindGroup ce as (BindGroup [] [Impl tmpVar [Binding [PVar a] x]])
-    (qs, t) <- tiExpr ce (as' ++ as) (Var tmpVar)
+    (ps, as') <- tiDefinitions ce as [Definition tmpVar Nothing [Binding [PVar a] x]]
+    (qs, t) <- tiExpr ce (as' ++ as) (Var ann tmpVar)
     return (ps ++ qs, t)
   -- Simple appication
-  App e f -> do
+  App _ e f -> do
     (ps, te) <- tiExpr ce as e
     (qs, tf) <- tiExpr ce as f
     t <- newTVar Star
@@ -187,10 +185,11 @@ tiExpr ce as e = case e of
     return (ps ++ qs, t)
 
   -- Infix syntax is just a magic version of apply
-  Inf op l r -> tiExpr ce as (App (App (Var op) l) r)
-  -- -- Everything else is a double, for now. TODO: fix this!
-  -- _ -> do
-  --   return ([], tDouble)
+  Inf a op l r -> tiExpr ce as (App a (App a (Var a op) l) r)
+
+-- -- Everything else is a double, for now. TODO: fix this!
+-- _ -> do
+--   return ([], tDouble)
 
 tiBinding :: Infer Binding Type
 tiBinding ce as (Binding pats e) = do
@@ -217,8 +216,14 @@ tiPats pats = do
       ts = [t | (_, _, t) <- psasts]
   return (ps, as, ts)
 
-tiBindGroup :: Infer BindGroup [Assump]
-tiBindGroup ce as (BindGroup es iss) = do
+tiDefinitions :: Infer [Definition] [Assump]
+tiDefinitions ce as defs = do
+  -- Split the definitions into "Explicit" and "Implicit" groups based on
+  -- if they are provided with a type or now.
+  let es = [Expl v sc alts | o@(Definition v (Just sc) alts) <- defs]
+  let iss = [Impl v alts | o@(Definition v Nothing alts) <- defs]
+  -- TODO:
+  -- return ([], as)
   let as' = [v :>: sc | (Expl v sc alts) <- es]
   (ps, as'') <- tiImpls ce (as' ++ as) iss
   qss <- mapM (tiExpl ce (as'' ++ as' ++ as)) es
@@ -238,10 +243,10 @@ tiExpl ce as ex@(Expl i sc alts) =
         ps' = filter (not . entail ce qs') (apply s ps)
     (ds, rs) <- split ce fs gs ps'
     if sc /= sc'
-      then fail ("signature too general" <> show ex <> " sc:" <> show sc <> " sc':" <> show sc')
+      then liftEither $ genericTypeError ("signature too general" <> show ex <> " sc:" <> show sc <> " sc':" <> show sc')
       else
         if not (null rs)
-          then fail "context too weak"
+          then liftEither $ genericTypeError "context too weak"
           else return ds
 
 restricted :: [Impl] -> Bool
@@ -282,14 +287,13 @@ tiSeq ti ce as (bs : bss) = do
 
 --------------------------------------------------------------------------------
 split ::
-  MonadFail m =>
   ClassEnv ->
   [Tyvar] ->
   [Tyvar] ->
   [Pred] ->
-  m ([Pred], [Pred])
+  TI ([Pred], [Pred])
 split ce fs gs ps = do
-  ps' <- reduce ce ps
+  ps' <- liftEither $ reduce ce ps
   let (ds, rs) = partition (all (`elem` fs) . tv) ps'
   rs' <- defaultedPreds ce (fs ++ gs) rs
   return (ds, rs \\ rs')
@@ -302,8 +306,8 @@ candidates ce (v, qs) =
       all (TVar v ==) ts,
       any (`elem` numClasses) is,
       all (`elem` stdClasses) is,
-      t' <- defaults ce -- ,
-      -- all (entail ce []) [IsIn i t' | i <- is]
+      t' <- defaults ce,
+      all (entail ce []) [IsIn i t' | i <- is]
   ]
 
 stdClasses :: [Id]
@@ -330,32 +334,30 @@ numClasses :: [Id]
 numClasses = ["Num", "Integral", "Floating", "Fractional", "Real", "RealFloat", "RealFrac"]
 
 withDefaults ::
-  MonadFail m =>
   ([Ambiguity] -> [Type] -> a) ->
   ClassEnv ->
   [Tyvar] ->
   [Pred] ->
-  m a
+  TI a
 withDefaults f ce vs ps
-  | any null tss = trace (show ce) $ fail "cannot resolve ambiguity"
+  | any null tss = trace (show ce) $ throwError (TEGeneric "cannot resolve ambiguity")
   | otherwise = return (f vps (map head tss))
   where
     vps = ambiguities ce vs ps
     tss = map (candidates ce) vps
 
-defaultedPreds :: MonadFail m => ClassEnv -> [Tyvar] -> [Pred] -> m [Pred]
+defaultedPreds :: ClassEnv -> [Tyvar] -> [Pred] -> TI [Pred]
 defaultedPreds = withDefaults (\vps ts -> concatMap snd vps)
 
-defaultSubst :: MonadFail m => ClassEnv -> [Tyvar] -> [Pred] -> m Subst
+defaultSubst :: ClassEnv -> [Tyvar] -> [Pred] -> TI Subst
 defaultSubst ce ts ps = withDefaults (zip . map fst) ce ts ps
 
-tiProgram :: ClassEnv -> [Assump] -> Program -> [Assump]
-tiProgram ce as bindGroups = runTI $
+tiProgram :: ClassEnv -> [Assump] -> [Program] -> Either TypeError [Assump]
+tiProgram ce as progs = runTI $
   do
-    (ps, as') <- tiSeq tiBindGroup ce as bindGroups
-    -- (ps, as') <- tiSeq tiBindGroup ce as' bindGroups
+    (ps, as') <- tiSeq tiDefinitions ce as (map defs progs)
     s <- getSubst
-    rs <- reduce ce (apply s ps)
-    -- let rs = apply s ps -- TODO: I removed reduction. Do that!
+    rs <- liftEither $ reduce ce (apply s ps)
+    -- let rs = apply s ps
     s' <- defaultSubst ce [] rs
     return (reverse (apply (s' @@ s) as'))

@@ -1,5 +1,5 @@
 -- Possibly the most simple ADT: Maybe
--- data Maybe 'a = Just 'a | Nothing
+data Maybe 'a = Just 'a | Nothing
 
 
 -- something :: 'a -> 'a

@@ -4,9 +4,12 @@
 module Futz.Types where
 
 import Control.Monad
+import Control.Monad.Except
+import Data.Either.Combinators
 import Data.Foldable ()
 import Data.List (intercalate, intersect, nub, union)
 import qualified Data.Map as Map
+import Data.Maybe
 
 type TVar = String
 
@@ -110,6 +113,19 @@ instance HasKind Type where
     (Kfun _ k) -> k
     k -> k
 
+
+data TypeError = TEGeneric String -- A generic type error. Avoid using this.
+               | MergeFailure Subst Subst
+  deriving (Eq)
+
+
+instance Show TypeError where
+  show (TEGeneric s) = s
+  show (MergeFailure s1 s2) = "Merge failure between " <> show s1 <> " and " <> show s2
+
+genericTypeError :: String -> Either TypeError a
+genericTypeError = throwError . TEGeneric
+
 -- a substitution from one tyvar to another type, where they both have the same Kind
 type Subst = [(Tyvar, Type)]
 
@@ -164,8 +180,8 @@ s1 @@ s2 = [(u, apply s1 t) | (u, t) <- s2] ++ s1
 -- for merge to return its result in a monad, using the standard fail
 -- function to provide a string diagnostic in cases where the function
 -- is undefined.
-merge :: MonadFail m => Subst -> Subst -> m Subst
-merge s1 s2 = if agree then return (s1 ++ s2) else fail "merge fails"
+merge :: Subst -> Subst -> Either TypeError Subst
+merge s1 s2 = if agree then return (s1 ++ s2) else throwError (MergeFailure s1 s2)
   where
     agree =
       all
@@ -173,7 +189,7 @@ merge s1 s2 = if agree then return (s1 ++ s2) else fail "merge fails"
         (map fst s1 `intersect` map fst s2)
 
 -- mgu: most general unifier
-mgu :: MonadFail m => Type -> Type -> m Subst
+mgu :: Type -> Type -> Either TypeError Subst
 mgu (TAp l r) (TAp l' r') = do
   -- Unify both the left and right, then apply the substitutions
   s1 <- mgu l l'
@@ -183,30 +199,34 @@ mgu (TVar u) t = varBind u t
 mgu t (TVar u) = varBind u t
 mgu (TCon tc1) (TCon tc2)
   | tc1 == tc2 = return nullSubst
-  | otherwise = fail ("Unknown constant type unification: " <> show tc1 <> " and " <> show tc2)
+  | otherwise = throwError (TEGeneric ("Unknown constant type unification: " <> show tc1 <> " and " <> show tc2))
 mgu a b =
-  fail $
-    unlines
-      [ "[ERROR] Could not unify: " <> show a,
-        "                    and: " <> show b
-      ]
+  throwError $
+    TEGeneric
+      ( unlines
+          [ "[ERROR] Could not unify: " <> show a,
+            "                    and: " <> show b
+          ]
+      )
 
-varBind :: MonadFail m => Tyvar -> Type -> m Subst
+varBind :: MonadError TypeError m => Tyvar -> Type -> m Subst
 varBind u t
   | t == TVar u = return nullSubst
   -- \| u `elem` tv t = fail "occurs check fails"
   | kind u /= kind t =
-      fail $
-        unlines
-          [ "Kinds do not match between: " <> show u <> " of kind " <> show (kind u),
-            "                       and: " <> show t <> " of kind " <> show (kind t)
-          ]
+      throwError
+        ( TEGeneric $
+            unlines
+              [ "Kinds do not match between: " <> show u <> " of kind " <> show (kind u),
+                "                       and: " <> show t <> " of kind " <> show (kind t)
+              ]
+        )
   | otherwise = return (u +-> t)
 
 -- matching is closely related to unification. Given two types t1, t2, the goal is
 -- to find a substitution `s` such that `apply s t1 == t2`. Because the substitution
 -- is applied to only one type, this operation is often described as one-way matching.
-match :: MonadFail m => Type -> Type -> m Subst
+match :: Type -> Type -> Either TypeError Subst
 match (TAp l r) (TAp l' r') = do
   sl <- match l l'
   sr <- match r r'
@@ -214,12 +234,15 @@ match (TAp l r) (TAp l' r') = do
 match (TVar u) t | kind u == kind t = return (u +-> t)
 match (TCon tc1) (TCon tc2)
   | tc1 == tc2 = return nullSubst
-match t1 t2 = fail "types do not match"
+match t1 t2 = throwError (TEGeneric "types do not match")
 
 -- Qualified types and Type Classes. This is a type `t` where several predicates
 -- exist to qualify the type to whatever degree is needed.
 data Qual t = [Pred] :=> t
   deriving (Eq, Ord)
+
+instance HasKind (Qual Type) where
+  kind (ps :=> t) = kind t
 
 -- It would be easy to extend the Pred datatype to
 -- allow other forms of predicate, as is done with
@@ -236,7 +259,7 @@ data Pred = IsIn Id Type
   deriving (Eq, Ord)
 
 instance Show t => Show (Qual t) where
-  show ([] :=> t) = show t
+  -- show ([] :=> t) = show t
   show (ps :=> t) = unwords (map show ps) <> " => " <> show t
 
 instance Show Pred where
@@ -250,13 +273,14 @@ instance Types Pred where
   apply s (IsIn i t) = IsIn i (apply s t)
   tv (IsIn i t) = tv t
 
-mguPred, matchPred :: Pred -> Pred -> Maybe Subst
+mguPred, matchPred :: Pred -> Pred -> Either TypeError Subst
 mguPred = liftPred mgu
 matchPred = liftPred match
 
+liftPred :: MonadError TypeError m => (Type -> Type -> m a) -> Pred -> Pred -> m a
 liftPred m (IsIn i t) (IsIn i' t')
   | i == i' = m t t'
-  | otherwise = fail "classes differ"
+  | otherwise = throwError (TEGeneric "classes differ")
 
 ---- Type Class and Instances
 -- we will represent Class declarations as a class name,
@@ -301,7 +325,7 @@ classes :: ClassEnv -> Id -> Maybe Class
 classes ce i = Map.lookup i (classMap ce)
 
 -- The classes field of ClassEnv is a lambda which returns the class
--- for a given ID if it matches. See `modify` below for how that works.
+-- for a given ID if it matches. See `modifyClassEnv` below for how that works.
 -- The defaults field of ClassEnv is a list of default types.
 -- (TODO: what is that?)
 
@@ -327,11 +351,11 @@ defined :: Maybe a -> Bool
 defined (Just x) = True
 defined Nothing = False
 
--- We will also define a helper function, modify, to describe how
+-- We will also define a helper function, modifyClassEnv, to describe how
 -- a class environment can be updated to reflect a new binding of
 -- a Class value to a given identifier:
-modify :: ClassEnv -> Id -> Class -> ClassEnv
-modify ce i c =
+modifyClassEnv :: ClassEnv -> Id -> Class -> ClassEnv
+modifyClassEnv ce i c =
   ce
     { classMap = Map.insert i c (classMap ce)
     }
@@ -351,13 +375,13 @@ initialEnv =
 -- an existing class or instance. For this reason, we will describe
 -- transformations of a class environment as functions of the EnvTransformer
 -- type, using a Maybe type to allow for the possibility of errors:
-type EnvTransformer = ClassEnv -> Maybe ClassEnv
+type EnvTransformer m = ClassEnv -> m ClassEnv
 
 -- The sequencing of multiple transformers can be described by a (forward)
 -- composition operator (<:>):
 infixr 5 <:>
 
-(<:>) :: EnvTransformer -> EnvTransformer -> EnvTransformer
+(<:>) :: MonadError TypeError m => EnvTransformer m -> EnvTransformer m -> EnvTransformer m
 (f <:> g) ce = do
   ce' <- f ce
   g ce'
@@ -369,22 +393,22 @@ infixr 5 <:>
 -- necessary to topologically sort the set of class declarations in a program
 -- to determine a suitable ordering; any cycles in the hierarchy will typically
 -- be detected at this stage.
-addClass :: Id -> [Id] -> EnvTransformer
+addClass :: Id -> [Id] -> ClassEnv -> Either TypeError ClassEnv
 addClass i is ce
-  | defined (classes ce i) = fail "class already defined"
-  | not (all (defined . classes ce) is) = fail "superclass not defined"
-  | otherwise = return (modify ce i (Class i is []))
+  | defined (classes ce i) = genericTypeError "class already defined"
+  | not (all (defined . classes ce) is) = genericTypeError "superclass not defined"
+  | otherwise = return (modifyClassEnv ce i (Class i is []))
 
 -- For example, we can describe the effect of the class declarations in the
 -- Haskell prelude using the following transformer:
 -- TODO: REMOVE THESE WHEN YOU BUILD IT INTO THE SYNTAX
 
-addPreludeClasses :: EnvTransformer
+addPreludeClasses :: ClassEnv -> Either TypeError ClassEnv
 addPreludeClasses = addCoreClasses <:> addNumClasses
 
 -- This definition breaks down the set of standard Haskell classes into
 -- two separate pieces. The core classes are described as follows:
-addCoreClasses :: EnvTransformer
+addCoreClasses :: ClassEnv -> Either TypeError ClassEnv
 addCoreClasses =
   addClass "Eq" []
     <:> addClass "Ord" ["Eq"]
@@ -397,7 +421,7 @@ addCoreClasses =
 
 -- The hierarchy of numeric classes is captured separately in
 -- the following definition:
-addNumClasses :: EnvTransformer
+addNumClasses :: ClassEnv -> Either TypeError ClassEnv
 addNumClasses =
   addClass "Num" ["Eq", "Show"]
     <:> addClass "Real" ["Num", "Ord"]
@@ -410,11 +434,11 @@ addNumClasses =
 -- To add a new instance to a class, we must check that the class to
 -- which the instance applies is defined, and that the new instance
 -- does not overlap with any previously declared instance:
-addInst :: [Pred] -> Pred -> EnvTransformer
+addInst :: [Pred] -> Pred -> ClassEnv -> Either TypeError ClassEnv
 addInst ps p@(IsIn className _) ce
-  | not (defined (classes ce className)) = fail $ "no class for instance " <> className
-  | any (overlap p) qs = fail "overlapping instance"
-  | otherwise = return (modify ce className c)
+  | not (defined (classes ce className)) = genericTypeError ("no class for instance " <> className)
+  | any (overlap p) qs = genericTypeError "overlapping instance"
+  | otherwise = return (modifyClassEnv ce className c)
   where
     instances = insts ce className
     supes = super ce className
@@ -426,7 +450,9 @@ addInst ps p@(IsIn className _) ce
 -- instance declarations. It is easy to test for overlapping predicates
 -- using the functions that we have defined previously:
 overlap :: Pred -> Pred -> Bool
-overlap p q = defined (mguPred p q)
+overlap p q = case mguPred p q of
+  Left _ -> False
+  Right r -> defined (Just r)
 
 -- This test covers simple cases where a program provides two instance
 -- declarations for the same type (for example, two declarations for Eq Int),
@@ -444,9 +470,11 @@ overlap p q = defined (mguPred p q)
 -- To illustrate how the addInst function might be used, the following definition
 -- shows how the standard prelude class environment can be extended to include the
 -- four instances for Ord from the example in Basic Definitions.
-exampleInsts :: EnvTransformer
+exampleInsts :: ClassEnv -> Either TypeError ClassEnv
 exampleInsts =
   addPreludeClasses
+    <:> addInst [] (IsIn "Num" tInt)
+    <:> addInst [] (IsIn "Num" tDouble)
     <:> addInst [] (IsIn "Ord" tUnit)
     <:> addInst [] (IsIn "Ord" tChar)
     <:> addInst [] (IsIn "Ord" tInt)
@@ -500,11 +528,11 @@ bySuper ce p@(IsIn i t) =
 -- map (apply u) ps. The following function uses these ideas to determine the list of subgoals
 -- for a given predicate:
 byInst :: ClassEnv -> Pred -> Maybe [Pred]
-byInst ce p@(IsIn i t) = msum [tryInst it | it <- insts ce i]
+byInst ce p@(IsIn i t) = msum [rightToMaybe (tryInst it) | it <- insts ce i]
   where
     tryInst (ps :=> h) = do
       u <- matchPred h p
-      Just (map (apply u) ps)
+      Right (map (apply u) ps)
 
 -- The msum function used here comes from the standard Monad library, and returns the first
 -- defined element in a list of Maybe values; if there are no defined elements in the list,
@@ -577,16 +605,16 @@ inHnf (IsIn c t) = hnf t
 -- result in predicates being eliminated altogether. In others, where byInst fails, it will indicate
 -- that a predicate is unsatisfiable, and will trigger an error diagnostic. This process is captured
 -- in the following definition:
-toHnfs :: MonadFail m => ClassEnv -> [Pred] -> m [Pred]
+toHnfs :: ClassEnv -> [Pred] -> Either TypeError [Pred]
 toHnfs ce ps = do
   pss <- mapM (toHnf ce) ps
   return (concat pss)
 
-toHnf :: MonadFail m => ClassEnv -> Pred -> m [Pred]
+toHnf :: ClassEnv -> Pred -> Either TypeError [Pred]
 toHnf ce p
   | inHnf p = return [p]
   | otherwise = case byInst ce p of
-      Nothing -> fail ("context reduction on " <> show p)
+      Nothing -> genericTypeError ("context reduction on " <> show p)
       Just ps -> toHnfs ce ps
 
 -- Another way to simplify a list of predicates is to reduce the number of elements that it contains.
@@ -612,7 +640,7 @@ simplify ce = loop []
 -- Now we can describe the particular form of context reduction used in Haskell as a combination of
 -- toHnfs and simplify. Specifically, we use toHnfs to reduce the list of predicates to head-normal
 -- form, and then simplify the result:
-reduce :: MonadFail m => ClassEnv -> [Pred] -> m [Pred]
+reduce :: ClassEnv -> [Pred] -> Either TypeError [Pred]
 reduce ce ps = do
   qs <- toHnfs ce ps
   return (simplify ce qs)
@@ -713,9 +741,11 @@ instance Types Assump where
 -- the apply and tv operators on the lists of assumptions that are used to record the
 -- type of each program variable during type inference. We will also use the following
 -- function to find the type of a particular variable in a given set of assumptions:
-find :: MonadFail m => Id -> [Assump] -> m Scheme
-find i [] = fail ("unbound identifier: " ++ i)
-find i ((i' :>: sc) : as) = if i == i' then return sc else find i as
+find :: Id -> [Assump] -> Maybe Scheme
+find i [] = Nothing
+find i ((i' :>: sc) : as)
+  | i == i' = Just sc
+  | otherwise = find i as
 
 -- This definition allows for the possibility that the variable i might not appear in as.
 -- In practice, occurrences of unbound variables will probably have been detected in earlier

@@ -13,30 +13,38 @@
 
 -- data Maybe 'a = Just 'a | Nothing
 
-$add :: Int -> Int -> Int
-(+) = \a b -> $add a b
+-- $add :: Num 'a => 'a -> 'a -> 'a
+(+) :: Num 'a => 'a -> 'a -> 'a
+-- (+) = \a b -> $add a b
+-- $sub :: Int -> Int -> Int
+-- (-) = \a b -> $sub a b
+-- $mul :: Int -> Int -> Int
+-- (*) = \a b -> $mul a b
+-- $div :: Int -> Int -> Int
+-- (/) = \a b -> $div a b
 
-$sub :: Int -> Int -> Int
-(-) = \a b -> $sub a b
-
-
-$mul :: Int -> Int -> Int
-(*) = \a b -> $mul a b
-
-$div :: Int -> Int -> Int
-(/) = \a b -> $div a b
-
-flip = \f x y -> f y x
+-- flip = \f x y -> f y x
 -- foo = \x -> x + 4
 
-eq :: 'a -> 'a -> Bool
+-- eq :: 'a -> 'a -> Bool
 
 
+-- foo = 4
+
+-- fuzz = \x -> foo + x
 -- compose :: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
--- compose = λf g x -> f of g x
+-- compose = fn f g x -> f of g x
 -- (.) = compose
+
 -- (>>=) :: 'm 'a -> ('a -> 'm 'b) -> 'm 'b
 -- just :: 'a -> Maybe 'a
--- something = \f -> f >>= (\x -> just 4)
+-- something = fn f -> f >>= (fn x -> just 4)
+zoop :: Num 'a => 'a
+zoop = 4
+boop = fn x -> zoop + x
+doop = if boop zoop then 1 else 5
+-- zoop = 4
+-- foo = \c x y -> if c then x + y else y
 
-foo = \c x y -> if c then x + y else y
+-- foo :: Int -> Int
+-- foo = \x -> if x then 1 else 0

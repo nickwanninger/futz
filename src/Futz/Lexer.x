@@ -44,6 +44,7 @@ tokens :-
   \)                            { mkL LRParen }
   \->                           { mkL LArrow }
   λ                             { mkL LLambda }
+  "fn"                          { mkL LLambda }
   \|                            { mkL LPipe }
   \\                            { mkL LLambda }
   \::                           { mkL LIsType }
