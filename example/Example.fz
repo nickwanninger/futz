@@ -1,3 +1,57 @@
+
+def (+) :: Int -> Int -> Int
+  | a + b = #(addInt :: Int | a | b )
+
+def (-) :: Int -> Int -> Int
+  | a - b = #(addInt :: Int | a | b )
+
+def (*) :: Int -> Int -> Int
+  | (*) a b = #(mulInt :: Int | a | b )
+
+def (/) :: Int -> Int -> Int
+  | a / b = #(divInt :: Int | a | b )
+
+def (==) :: Int -> Int -> Bool
+  | a == b = #(eqInt :: Bool | a | b )
+
+data Maybe a = Just a | Nothing
+
+def safediv x y = if y == 0 then Nothing else Just (x / y)
+
+def sum n =
+    if n == 1 then
+       1
+    else 
+       let f x = id of n + x | id x = x
+        in f (sum (n - 1))
+
+-- let rec sum n =
+--   if n = 1 then
+--     1
+--   else
+--     let f x =
+--       n + x in
+--     f (sum (n - 1)) in
+--       sum 100
+
+-- def show :: Show a => a -> String
+-- def (++) :: String -> String -> String
+
+-- def myShow a b = (show a) ++ (show b)
+-- def fuzz :: a -> b -> c -> d -> e -> f -> g
+-- def (+) :: {Num a} a -> a -> a
+--   | (+) a b = #(addInt :: a | a | b)
+--
+-- def foo a b = a + b
+
+-- def doodad :: {Eq a} a -> a
+
+-- def print a = internalDoIO
+
+-- def main :: IO a
+--   | main = print 4
+
+
 -- typeTest = let id = \x -> x in id 42
 -- addTest = let add = \x y -> x + y in add 1 2
 -- idTest = (\x -> x) 42
@@ -14,7 +68,7 @@
 -- data Maybe 'a = Just 'a | Nothing
 
 -- $add :: Num 'a => 'a -> 'a -> 'a
-(+) :: Num 'a => 'a -> 'a -> 'a
+-- (+) :: Num 'a => 'a -> 'a -> 'a
 -- (+) = \a b -> $add a b
 -- $sub :: Int -> Int -> Int
 -- (-) = \a b -> $sub a b
@@ -29,7 +83,6 @@
 -- eq :: 'a -> 'a -> Bool
 
 
--- foo = 4
 
 -- fuzz = \x -> foo + x
 -- compose :: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
@@ -39,10 +92,10 @@
 -- (>>=) :: 'm 'a -> ('a -> 'm 'b) -> 'm 'b
 -- just :: 'a -> Maybe 'a
 -- something = fn f -> f >>= (fn x -> just 4)
-zoop :: Num 'a => 'a
-zoop = 4
-boop = fn x -> zoop + x
-doop = if boop zoop then 1 else 5
+-- zoop :: Num 'a => 'a
+-- zoop = 4
+-- let boop = fn x -> zoop + x
+-- doop = if  then 1 else 5
 -- zoop = 4
 -- foo = \c x y -> if c then x + y else y
 

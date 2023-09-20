@@ -1,8 +1,10 @@
 -- The type system described here is basically
 -- line-for-line what is in "Typing Haskell in Haskell"
+{-# LANGUAGE InstanceSigs #-}
 
 module Futz.Types where
 
+import Control.Lens
 import Control.Monad
 import Control.Monad.Except
 import Data.Either.Combinators
@@ -44,7 +46,7 @@ data Tycon = Tycon Id Kind
   deriving (Eq, Ord)
 
 instance Show Type where
-  show (TVar name) = "'" <> show name
+  show (TVar name) = show name
   show (TCon name) = show name
   -- Arrow is a little interesting to print. For clairty we put
   -- parens around the argument if it itself is an Arrow, to be clear
@@ -53,7 +55,13 @@ instance Show Type where
     | isArrowType a' = "(" <> show a' <> ") -> " <> show b
     | otherwise = show a' <> " -> " <> show b
   show (TAp a b) = plainShowAp a b
-  show (TGen i) = "'a" <> show i -- Unsure how to show this. I'll just show them as invalid syntax for now.
+  -- Unsure how to show this. I'll just show them as invalid syntax for now.
+  show (TGen i) = greekify i
+    where
+      greek = "αβγδεζηθικλμνξοπρστυφχψω"
+      greekify i = case greek ^? element i of
+        Just g -> [g]
+        Nothing -> greekify (i `mod` 24) ++ show (i `div` 24)
 
 plainShowAp a b = "(" <> show a <> " " <> show b <> ")"
 
@@ -97,6 +105,12 @@ list = TAp tList
 pair :: Type -> Type -> Type
 pair a = TAp (TAp tTuple2 a)
 
+-- given a type name, and a list of types, produce a TAp w/ a fold
+fromDataDecl :: Id -> [Id] -> Type
+fromDataDecl name = foldl (\t a -> TAp t (TVar (tyvar a))) (TCon (Tycon name Star))
+
+-- TAp (TAp (TCon Maybe) (TVar a)) (TVar b)
+
 class HasKind t where
   kind :: t -> Kind
 
@@ -113,15 +127,32 @@ instance HasKind Type where
     (Kfun _ k) -> k
     k -> k
 
-
-data TypeError = TEGeneric String -- A generic type error. Avoid using this.
-               | MergeFailure Subst Subst
+data TypeError
+  = TEGeneric String -- A generic type error. Avoid using this.
+  | TypeMismatch Type Type
+  | MergeFailure Subst Subst
+  | UnificationFailure Type Type
+  | KindMismatch Type Type
   deriving (Eq)
-
 
 instance Show TypeError where
   show (TEGeneric s) = s
+  show (TypeMismatch t1 t2) =
+    unlines
+      [ "Type mismatch: " <> show t1,
+        "          and: " <> show t2
+      ]
   show (MergeFailure s1 s2) = "Merge failure between " <> show s1 <> " and " <> show s2
+  show (UnificationFailure t1 t2) =
+    unlines
+      [ "[ERROR] Could not unify: " <> show t1,
+        "                    and: " <> show t2
+      ]
+  show (KindMismatch a b) =
+    unlines
+      [ "Kinds do not match between: " <> show a <> " of kind " <> show (kind a),
+        "                       and: " <> show b <> " of kind " <> show (kind b)
+      ]
 
 genericTypeError :: String -> Either TypeError a
 genericTypeError = throwError . TEGeneric
@@ -197,30 +228,17 @@ mgu (TAp l r) (TAp l' r') = do
   return (s2 @@ s1)
 mgu (TVar u) t = varBind u t
 mgu t (TVar u) = varBind u t
-mgu (TCon tc1) (TCon tc2)
+mgu a@(TCon tc1) b@(TCon tc2)
   | tc1 == tc2 = return nullSubst
-  | otherwise = throwError (TEGeneric ("Unknown constant type unification: " <> show tc1 <> " and " <> show tc2))
-mgu a b =
-  throwError $
-    TEGeneric
-      ( unlines
-          [ "[ERROR] Could not unify: " <> show a,
-            "                    and: " <> show b
-          ]
-      )
+  | otherwise = throwError (UnificationFailure a b)
+mgu a b = throwError (UnificationFailure a b)
 
 varBind :: MonadError TypeError m => Tyvar -> Type -> m Subst
 varBind u t
   | t == TVar u = return nullSubst
   -- \| u `elem` tv t = fail "occurs check fails"
   | kind u /= kind t =
-      throwError
-        ( TEGeneric $
-            unlines
-              [ "Kinds do not match between: " <> show u <> " of kind " <> show (kind u),
-                "                       and: " <> show t <> " of kind " <> show (kind t)
-              ]
-        )
+      throwError (KindMismatch (TVar u) t)
   | otherwise = return (u +-> t)
 
 -- matching is closely related to unification. Given two types t1, t2, the goal is
@@ -234,7 +252,7 @@ match (TAp l r) (TAp l' r') = do
 match (TVar u) t | kind u == kind t = return (u +-> t)
 match (TCon tc1) (TCon tc2)
   | tc1 == tc2 = return nullSubst
-match t1 t2 = throwError (TEGeneric "types do not match")
+match t1 t2 = throwError (TypeMismatch t1 t2)
 
 -- Qualified types and Type Classes. This is a type `t` where several predicates
 -- exist to qualify the type to whatever degree is needed.
@@ -259,7 +277,7 @@ data Pred = IsIn Id Type
   deriving (Eq, Ord)
 
 instance Show t => Show (Qual t) where
-  -- show ([] :=> t) = show t
+  show ([] :=> t) = show t
   show (ps :=> t) = unwords (map show ps) <> " => " <> show t
 
 instance Show Pred where
@@ -395,8 +413,8 @@ infixr 5 <:>
 -- be detected at this stage.
 addClass :: Id -> [Id] -> ClassEnv -> Either TypeError ClassEnv
 addClass i is ce
-  | defined (classes ce i) = genericTypeError "class already defined"
-  | not (all (defined . classes ce) is) = genericTypeError "superclass not defined"
+  | defined (classes ce i) = genericTypeError ("class " <> i <> " is already defined")
+  | not (all (defined . classes ce) is) = genericTypeError ("superclass not defined (" <> i <> ")")
   | otherwise = return (modifyClassEnv ce i (Class i is []))
 
 -- For example, we can describe the effect of the class declarations in the
@@ -449,11 +467,7 @@ addInst ps p@(IsIn className _) ce
 -- predicate that is a substitution instance of the heads of both
 -- instance declarations. It is easy to test for overlapping predicates
 -- using the functions that we have defined previously:
-overlap :: Pred -> Pred -> Bool
-overlap p q = case mguPred p q of
-  Left _ -> False
-  Right r -> defined (Just r)
-
+--
 -- This test covers simple cases where a program provides two instance
 -- declarations for the same type (for example, two declarations for Eq Int),
 -- but it also covers cases where more interesting overlaps occur (for example,
@@ -466,6 +480,10 @@ overlap p q = case mguPred p q of
 -- interesting applications, but also have some potentially troublesome impact
 -- on program semantics [Peyton Jones et al. , 1997]. We will not consider such
 -- issues further here.
+overlap :: Pred -> Pred -> Bool
+overlap p q = case mguPred p q of
+  Left _ -> False
+  Right r -> defined (Just r)
 
 -- To illustrate how the addInst function might be used, the following definition
 -- shows how the standard prelude class environment can be extended to include the
@@ -473,6 +491,7 @@ overlap p q = case mguPred p q of
 exampleInsts :: ClassEnv -> Either TypeError ClassEnv
 exampleInsts =
   addPreludeClasses
+    <:> addInst [] (IsIn "Show" tInt)
     <:> addInst [] (IsIn "Num" tInt)
     <:> addInst [] (IsIn "Num" tDouble)
     <:> addInst [] (IsIn "Ord" tUnit)
@@ -491,9 +510,7 @@ exampleInsts =
       )
 
 --
---  Entailment:
---     noun - the act or fact of entailing, or involving
---            by necessity or as a consequence
+--  Entailment
 --
 -- In this section, we describe how class environments can be used to answer
 -- questions about which types are instances of particular classes. More generally,
@@ -728,12 +745,21 @@ toScheme t = Forall [] ([] :=> t)
 data Assump = Id :>: Scheme
   deriving (Eq)
 
+type AssumpMap = Map.Map Id Assump
+
+toAssumpMap :: [Assump] -> AssumpMap
+toAssumpMap = foldl (\m a@(i :>: s) -> Map.insert i a m) Map.empty
+
+fromAssumpMap :: AssumpMap -> [Assump]
+fromAssumpMap = Map.elems
+
 instance Show Assump where
   show (id :>: sc) = id <> " :: " <> show sc
 
 -- Once again, we can extend the Types class to allow the application of a
 -- substitution to an assumption:
 instance Types Assump where
+  apply :: Subst -> Assump -> Assump
   apply s (i :>: sc) = i :>: apply s sc
   tv (i :>: sc) = tv sc
 
@@ -741,11 +767,11 @@ instance Types Assump where
 -- the apply and tv operators on the lists of assumptions that are used to record the
 -- type of each program variable during type inference. We will also use the following
 -- function to find the type of a particular variable in a given set of assumptions:
-find :: Id -> [Assump] -> Maybe Scheme
-find i [] = Nothing
-find i ((i' :>: sc) : as)
+findAssump :: Id -> [Assump] -> Maybe Scheme
+findAssump i [] = Nothing
+findAssump i ((i' :>: sc) : as)
   | i == i' = Just sc
-  | otherwise = find i as
+  | otherwise = findAssump i as
 
 -- This definition allows for the possibility that the variable i might not appear in as.
 -- In practice, occurrences of unbound variables will probably have been detected in earlier

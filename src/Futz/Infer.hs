@@ -1,8 +1,9 @@
+{-# HLINT ignore "Use zipWithM" #-}
+{-# HLINT ignore "Eta reduce" #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use zipWithM" #-}
-{-# HLINT ignore "Eta reduce" #-}
 module Futz.Infer where
 
 import Control.Applicative -- Otherwise you can't do the Applicative instance.
@@ -10,33 +11,32 @@ import Control.Monad (ap, liftM)
 import Control.Monad.Except
 import Control.Monad.State
 import Data.List
+import qualified Data.Map as Map
 import Debug.Trace
 import Futz.Syntax
 import Futz.Types
 
-
-
-data Expl = Expl Var Scheme [Binding]
+data Expl = Expl Var Scheme [Binding SourceRange]
   deriving (Eq, Show)
-data Impl = Impl Var [Binding]
+
+data Impl = Impl Var [Binding SourceRange]
   deriving (Eq, Show)
 
 implName (Impl v _) = v
-implBindings (Impl _ as) = as
---
---   A Type Inference Monad
-type TI a = ExceptT TypeError (State InferState) a
 
--- type TI a = ExceptT InferState (State TypeError) a
+implBindings (Impl _ as) = as
+
+-- The Type Inference Monad
+type TI a = ExceptT TypeError (State InferState) a
 
 data InferState = InferState
   { substs :: Subst,
-    nextId :: Int
+    nextId :: Int,
+    mappings :: Map.Map (Exp SourceRange) Type
   }
   deriving (Eq, Show)
 
-defaultInferState = InferState {substs = nullSubst, nextId = 0}
-
+defaultInferState = InferState {substs = nullSubst, nextId = 0, mappings = Map.empty}
 
 runTI :: TI a -> Either TypeError a
 runTI ti = evalState (runExceptT ti) defaultInferState
@@ -108,6 +108,7 @@ instance Instantiate Type where
   inst ts t = t
 
 instance Instantiate a => Instantiate [a] where
+  inst :: Instantiate a => [Type] -> [a] -> [a]
   inst ts = map (inst ts)
 
 instance Instantiate t => Instantiate (Qual t) where
@@ -117,30 +118,32 @@ instance Instantiate Pred where
   inst ts (IsIn c t) = IsIn c (inst ts t)
 
 -------------------------------------------------------------------------------
---
---
---
---
---   Type Inference
---
--- With this section we have reached the heart of the paper, detailing our algorithm for type
--- inference. It is here that we finally see how the machinery that has been built up in earlier
--- sections is actually put to use. We develop the complete algorithm in stages, working through
--- the abstract syntax of the input language from the simplest part (literals) to the most complex
--- (binding groups). Most of the typing rules are expressed by functions whose types are simple
--- variants of the following synonym:
+
 type Infer e t = ClassEnv -> [Assump] -> e -> TI ([Pred], t)
 
 class Inferrable e where
   infer :: Infer e Type
+
+makeExpressionTypeError :: Exp SourceRange -> String -> TypeError
+makeExpressionTypeError exp msg =
+  TEGeneric $
+    unlines
+      [ "Type error at " <> show (locate exp) <> ":",
+        "   " <> msg,
+        "   Problematic Expression:",
+        "       " <> show exp
+      ]
 
 -- Expressions
 -- Next we describe type inference for expressions, represented by the Expr datatype:
 tiExpr :: Infer (Exp SourceRange) Type
 tiExpr ce as e = case e of
   -- let, supporting rec
-  Let _ n v e -> do
-    (ps, as') <- tiDefinitions ce as [Definition n Nothing [Binding [] v]]
+  Let _ defs e -> do
+    -- (ps, as') <- tiDefinitions ce as [Definition n Nothing [Binding [] v]]
+    -- (ps, as') <- tiBindings ce as bindings t
+    (ps, as') <- tiDefinitions ce as defs
+
     (qs, t) <- tiExpr ce (as' ++ as) e
     return (ps ++ qs, t)
   Lit _ (LitInt _) -> do
@@ -149,12 +152,11 @@ tiExpr ce as e = case e of
   -- return ([], tInt)
 
   -- variable inference is just a lookup
-  Var _ i -> case Futz.Types.find i as of
+  Var _ i -> case findAssump i as of
     Just sc -> do
       (ps :=> t) <- freshInst sc
       return (ps, t)
     Nothing -> throwError $ TEGeneric ("Failed: variable " <> i <> " not bound")
-
   IfElse _ tst thn els -> do
     (psTst, tTst) <- tiExpr ce as tst
     (psThn, tThn) <- tiExpr ce as thn
@@ -168,7 +170,7 @@ tiExpr ce as e = case e of
     unify tEls t
     return (psTst ++ psThn ++ psEls, tEls)
 
-  -- For lambdas, turn `\x->e` into `let f x = e in f`
+  -- For lambdas, turn `\x -> e` into `let f x = e in f`
   -- and typecheck that instead
   Lambda ann a x -> do
     n <- newIdNum
@@ -185,19 +187,23 @@ tiExpr ce as e = case e of
     return (ps ++ qs, t)
 
   -- Infix syntax is just a magic version of apply
-  Inf a op l r -> tiExpr ce as (App a (App a (Var a op) l) r)
+  Inf a op l r -> do
+    tiExpr ce as (App a (App a (Var a op) l) r)
 
--- -- Everything else is a double, for now. TODO: fix this!
--- _ -> do
---   return ([], tDouble)
+  -- A native call is just the type that the user provides. We just trust them on this.
+  NativeCall _ _ t _ -> do
+    -- if the return type of the native call has variables, we must error.
+    if null (tv t)
+      then return ([], t) -- There are no vars. All good!
+      else throwError (makeExpressionTypeError e "Native calls must not have type variables")
 
-tiBinding :: Infer Binding Type
+tiBinding :: Infer (Binding SourceRange) Type
 tiBinding ce as (Binding pats e) = do
   (ps, as', ts) <- tiPats pats
   (qs, t) <- tiExpr ce (as' ++ as) e
   return (ps ++ qs, foldr fn t ts)
 
-tiBindings :: ClassEnv -> [Assump] -> [Binding] -> Type -> TI [Pred]
+tiBindings :: ClassEnv -> [Assump] -> [Binding SourceRange] -> Type -> TI [Pred]
 tiBindings ce as bindings t = do
   psts <- mapM (tiBinding ce as) bindings
   mapM_ (unify t . snd) psts
@@ -216,21 +222,20 @@ tiPats pats = do
       ts = [t | (_, _, t) <- psasts]
   return (ps, as, ts)
 
-tiDefinitions :: Infer [Definition] [Assump]
+tiDefinitions :: Infer [Definition SourceRange] [Assump]
 tiDefinitions ce as defs = do
   -- Split the definitions into "Explicit" and "Implicit" groups based on
   -- if they are provided with a type or now.
   let es = [Expl v sc alts | o@(Definition v (Just sc) alts) <- defs]
   let iss = [Impl v alts | o@(Definition v Nothing alts) <- defs]
-  -- TODO:
   -- return ([], as)
   let as' = [v :>: sc | (Expl v sc alts) <- es]
-  (ps, as'') <- tiImpls ce (as' ++ as) iss
-  qss <- mapM (tiExpl ce (as'' ++ as' ++ as)) es
+  (ps, as'') <- tiImplicitBindings ce (as' ++ as) iss
+  qss <- mapM (tiExplicitBinding ce (as'' ++ as' ++ as)) es
   return (ps ++ concat qss, as'' ++ as')
 
-tiExpl :: ClassEnv -> [Assump] -> Expl -> TI [Pred]
-tiExpl ce as ex@(Expl i sc alts) =
+tiExplicitBinding :: ClassEnv -> [Assump] -> Expl -> TI [Pred]
+tiExplicitBinding ce as ex@(Expl i sc alts) =
   do
     (qs :=> t) <- freshInst sc
     ps <- tiBindings ce as alts t
@@ -254,29 +259,36 @@ restricted = any simple
   where
     simple (Impl i alts) = any (null . bindingPatterns) alts
 
-tiImpls :: Infer [Impl] [Assump]
-tiImpls ce as bs = do
-  ts <- mapM (\_ -> newTVar Star) bs
-  let is = map implName bs
-      scs = map toScheme ts
-      as' = zipWith (:>:) is scs ++ as
-      altss = map implBindings bs
-  pss <- sequence (zipWith (tiBindings ce as') altss ts)
-  s <- getSubst
-  let ps' = apply s (concat pss)
-      ts' = apply s ts
-      fs = tv (apply s as)
-      vss = map tv ts'
+tiImplicitBindings :: Infer [Impl] [Assump]
+tiImplicitBindings ce as [] = return ([], as)
+tiImplicitBindings ce as bs = do
+  -- Create a bunch of unnamed types
+  ts <- mapM (const $ newTVar Star) bs
+  let names = map implName bs -- Grab the names
+      scs = map toScheme ts -- Grab the schemes
+      -- Create some temp assumptions based on those scheme/name combos
+      as' = zipWith (:>:) names scs ++ as
+      -- Extract the bindings from the impls
+      bindings = map implBindings bs
+  -- Run type inference on each binding together, and grab the predicates
+  preds <- sequence (zipWith (tiBindings ce as') bindings ts)
+  s <- getSubst -- Grab the current substitution list
+  let ps' = apply s (concat preds) -- Apply the subst to those predicates
+      ts' = apply s ts -- apply the subst to the types we created earlier
+      fs = tv (apply s as) -- apply the subst to the assumptions, and grab the free type vars
+      vss = map tv ts' -- Gather up all the type vars from each substituted type
+      -- Fold Unification for each `vss` that isn't in `fs`
       gs = foldr1 union vss \\ fs
+  -- apply the split function to
   (ds, rs) <- split ce fs (foldr1 intersect vss) ps'
   if restricted bs
     then
       let gs' = gs \\ tv rs
           scs' = map (quantify gs' . ([] :=>)) ts'
-       in return (ds ++ rs, zipWith (:>:) is scs')
+       in return (ds ++ rs, zipWith (:>:) names scs')
     else
       let scs' = map (quantify gs . (rs :=>)) ts'
-       in return (ds, zipWith (:>:) is scs')
+       in return (ds, zipWith (:>:) names scs')
 
 tiSeq :: Infer bg [Assump] -> Infer [bg] [Assump]
 tiSeq ti ce as [] = return ([], [])
@@ -287,29 +299,54 @@ tiSeq ti ce as (bs : bss) = do
 
 --------------------------------------------------------------------------------
 split ::
-  ClassEnv ->
-  [Tyvar] ->
-  [Tyvar] ->
-  [Pred] ->
+  ClassEnv -> -- ce
+  [Tyvar] -> -- fixed
+  [Tyvar] -> -- toQuant
+  [Pred] -> -- ps
   TI ([Pred], [Pred])
-split ce fs gs ps = do
+split ce fixed toQuant ps = do
+  -- ce: the class envirionment
+  -- fixed: the set of "fixed" variables. Those which appear free in the assumptions.
+  -- toQuant: variables we would like to quantify.
+  -- ps: the predicates we want ot operate on.
+  --
+  -- First, reduce the predicates. Remember that this will, in effect, take a precdicate
+  -- `Eq (a, b)` and transform it to `(Eq a, Eq b)`, which is still valid iff `Eq (a, b)`
+  -- is valid.
   ps' <- liftEither $ reduce ce ps
-  let (ds, rs) = partition (all (`elem` fs) . tv) ps'
-  rs' <- defaultedPreds ce (fs ++ gs) rs
+  -- Partition the list of predicates into those who's
+  -- type variables are all in `fs` and those who don't.
+  let (ds, rs) = partition (all (`elem` fixed) . tv) ps'
+  -- Now, apply defaults to the side of the partition
+  -- without all their values being found in `fs`
+  rs' <- defaultedPreds ce (fixed ++ toQuant) rs
+  -- And simply return them, but with the difference between
+  -- rs and rs' being applied
   return (ds, rs \\ rs')
 
 candidates :: ClassEnv -> Ambiguity -> [Type]
 candidates ce (v, qs) =
+  -- Given an Ambiguity, look through the class envirionment and
+  -- return the types it *could* refer to.
+  --
+  -- If this function returns an empty list,
   [ t'
-    | let is = [i | IsIn i t <- qs]
+    | -- Extract two lists from the predicates, one for the class names
+      -- and one for the type names which are predicated on those classes
+      let is = [i | IsIn i t <- qs]
           ts = [t | IsIn i t <- qs],
       all (TVar v ==) ts,
+      -- currently, we only know how to resolve ambiguities with the standard
+      -- classes, so we only care about those.
       any (`elem` numClasses) is,
       all (`elem` stdClasses) is,
+      -- For each t' in the defaults...
       t' <- defaults ce,
+      -- it must pass an entail check for each `i` in `is`
       all (entail ce []) [IsIn i t' | i <- is]
   ]
 
+-- TODO: remove me when I support this syntax.
 stdClasses :: [Id]
 stdClasses =
   [ "Eq",
@@ -340,7 +377,7 @@ withDefaults ::
   [Pred] ->
   TI a
 withDefaults f ce vs ps
-  | any null tss = trace (show ce) $ throwError (TEGeneric "cannot resolve ambiguity")
+  | any null tss = throwError (TEGeneric ("cannot resolve ambiguity. vars:" <> show vps <> " ps: " <> show ps))
   | otherwise = return (f vps (map head tss))
   where
     vps = ambiguities ce vs ps
@@ -352,12 +389,11 @@ defaultedPreds = withDefaults (\vps ts -> concatMap snd vps)
 defaultSubst :: ClassEnv -> [Tyvar] -> [Pred] -> TI Subst
 defaultSubst ce ts ps = withDefaults (zip . map fst) ce ts ps
 
-tiProgram :: ClassEnv -> [Assump] -> [Program] -> Either TypeError [Assump]
+tiProgram :: ClassEnv -> [Assump] -> [Program SourceRange] -> Either TypeError [Assump]
 tiProgram ce as progs = runTI $
   do
     (ps, as') <- tiSeq tiDefinitions ce as (map defs progs)
     s <- getSubst
     rs <- liftEither $ reduce ce (apply s ps)
-    -- let rs = apply s ps
     s' <- defaultSubst ce [] rs
-    return (reverse (apply (s' @@ s) as'))
+    return $ fromAssumpMap (toAssumpMap (apply (s' @@ s) as'))

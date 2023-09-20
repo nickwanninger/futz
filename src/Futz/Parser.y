@@ -19,9 +19,11 @@ import Futz.Syntax
     then { Tok _ LSyntax "then" }
     else { Tok _ LSyntax "else" }
     data { Tok _ LSyntax "data" }
+    def  { Tok _ LSyntax "def" }
 
     pipe   { Tok _ LPipe _ }
     '=>'   { Tok _ LOp "=>" }
+    '#'   { Tok _ LOp "#" }
 
     -- Literals
     int  { Tok _ LInt _ }
@@ -35,10 +37,13 @@ import Futz.Syntax
     -- '/'      { Tok _ LDiv _ }
     '('      { Tok _ LLParen _ }
     ')'      { Tok _ LRParen _ }
-    arr      { Tok _ LArrow _ }
+    -- Curly bois
+    '{'      { Tok _ LLCurly _ }
+    '}'      { Tok _ LRCurly _ }
+    '->'      { Tok _ LArrow _ }
     'λ'      { Tok _ LLambda _ }
-    tname    { Tok _ LType $$ }
-    tvar     { Tok _ LTypeVar $$ }
+    tname    { Tok _ LType _ }
+    -- tvar     { Tok _ LTypeVar $$ }
     "::"     { Tok _ LIsType _ }
     -- Magic stuff inserted by the tokenizer
     sol      { TStartOfLine }
@@ -56,42 +61,80 @@ import Futz.Syntax
 
 %%
 
-toplevel : statement            { [$1] }
-         | statement toplevel   { $1 : $2 }
+top : statement            { [$1] }
+    | statement top   { $1 : $2 }
 
 statement
-  : sol var "::" qualtype                     { TypeDecl (tokVal $2) $4 }
-  | sol '(' op ')' "::" qualtype              { TypeDecl (tokVal $3) $6 }
-  | sol var '=' exp                           { Decl (tokVal $2) $4 }
-  | sol '(' op ')' '=' exp                    { Decl (tokVal $3) $6 }
-  | sol data tname listof(tvar) '=' ctors     { DataDecl $3 $4 $6 }
-  -- | sol var args '=' exp        { Decl $2 (expandLambdaArguments $3 $5) }
+  : sol def defnparts                            { TopDefn $3 }
+  | sol data tname listof(var) '=' ctors        { DataDecl (tokVal $3) (map tokVal $4) $6 }
+
+defnparts :: { [DefnPart SourceRange] }
+defnparts : defnpart                       { [$1] }
+          | defnpart pipe defnparts        { $1 : $3 }
+
+
+defnpart :: { DefnPart SourceRange }
+defnpart : var binding                   { DefnBind (tokVal $1) $2 }
+         | pat op pat '=' exp            { DefnBind (tokVal $2) (Binding [$1, $3] $5)}
+         | '(' op ')' binding            { DefnBind (tokVal $2) $4 }
+         -- Type definitions
+         | var "::" qtype                { DefnType (tokVal $1) $3 }
+         | '(' op ')' "::" qtype         { DefnType (tokVal $2) $5 }
+
+
+binding :: { Binding SourceRange }
+binding : listof(pat) '=' exp      { Binding $1 $3 }
+        | '=' exp                  { Binding [] $2 }
+
+
+pat :: { Pat }
+pat : var                      { PVar (tokVal $1) }
+
+-------------------------------------------------------------------------------
 
 exp :: { Exp SourceRange }
+
 exp
-  : let var '=' exp in exp          { Let (toRange $1 $6) (tokVal $2) $4 $6 }
-  | if exp then exp else exp        { IfElse (toRange $1 $6) $2 $4 $6 }
-  -- | let var args '=' exp in exp            { Let $2 (expandLambdaArguments $3 $5) $7 }
-  | 'λ' unmatching_args arr exp     { expandLambdaArguments $2 (toRange $1 $4) $4 }
-  | var                             { Var (toRange $1 $1) (tokVal $1) }
-  | expapp                          { $1 }
-  | atom of exp                     { App (toRange $1 $3) $1 $3 }
-  | atom op exp                     { Inf (toRange $1 $3) (tokVal $2) $1 $3 }
-  | atom                            { $1 }
-  | op                              { Var (toRange $1 $1) (tokVal $1) }
+: let letdefs in exp              { Let (toRange $1 $4) $2 $4 }
+| if exp then exp else exp        { IfElse (toRange $1 $6) $2 $4 $6 }
+| 'λ' args0 '->' exp              { expandLambdaArguments $2 (toRange $1 $4) $4 }
+| var                             { Var (toRange $1 $1) (tokVal $1) }
+| expapp                          { $1 }
+| atom of exp                     { App (toRange $1 $3) $1 $3 }
+| atom op exp                     { Inf (toRange $1 $3) (tokVal $2) $1 $3 }
+| atom                            { $1 }
+| op                              { Var (toRange $1 $1) (tokVal $1) }
+| nativeCall                      { $1 }
 
 expapp :: { Exp SourceRange }
 expapp
-  : expapp atom                   { App (toRange $1 $2) $1 $2 }
-  | atom                          { $1 }
+: expapp atom                   { App (toRange $1 $2) $1 $2 }
+| atom                          { $1 }
 
 atom :: { Exp SourceRange }
 atom
-  : int                           { Lit (toRange $1 $1) (LitInt (read (tokVal $1))) }
-  | var                           { Var (toRange $1 $1) (tokVal $1) }
-  | '(' op ')'                    { Var (toRange $2 $2) (tokVal $2) }
-  | '(' exp ')'                   { $2 }
+: int                           { Lit (toRange $1 $1) (LitInt (read (tokVal $1))) }
+| var                           { Var (toRange $1 $1) (tokVal $1) }
+-- TODO: give this it's own type!
+| tname                         { Var (toRange $1 $1) (tokVal $1) }
+| '(' op ')'                    { Var (toRange $2 $2) (tokVal $2) }
+| '(' exp ')'                   { $2 }
 
+
+nativeCall :: { Exp SourceRange }
+: '#' '(' var "::" type pipe listofSep(exp, pipe) ')'
+      { NativeCall (toRange $1 $8) (tokVal $3) $5 $7 }
+
+
+letdefs :: { [Definition SourceRange] }
+letdefs
+: letdef                       { [$1] }
+| letdef pipe letdefs          { $1 : $3 }
+
+letdef :: { Definition SourceRange }
+: var binding                          { Definition (tokVal $1) Nothing [$2] }
+
+-------------------------------------------------------------------------------
 
 argument :: { Argument }
 argument : var                    { Named (tokVal $1) }
@@ -101,59 +144,68 @@ args : argument                   { [$1] }
      | argument args              { $1 : $2 }
 
 
-unmatching_args :: { [Var] }
-unmatching_args : var                   { [tokVal $1] }
-                | var unmatching_args   { (tokVal $1) : $2 }
+args0 :: { [Var] }
+args0 : var                   { [tokVal $1] }
+                | var args0   { (tokVal $1) : $2 }
 
 
-typeParameters : simpleType                   { [$1] }
-               | simpleType typeParameters    { $1 : $2 }
+-------------------------------------------------------------------------------
 
 
--- A simpleType is a type that is either a single name, or
--- a complex type wrapped in parens
--- (arrows are not simple types)
-simpleType :: { T.Type }
-simpleType : tname                { T.TCon (T.Tycon $1 T.Star) } 
-           | tvar                 { T.TVar (T.Tyvar (tail $1) T.Star) }
-           | '(' type ')'         { $2 }
-
+-- Handle function types
 type :: { T.Type }
-type : simpleType                 { $1 } -- T.TCon (T.Tycon $1 T.Star) }
-     | tApp                       { $1 }
-     | type arr type              { T.fn $1 $3 }
+: btype '->' type     { T.fn $1 $3 }
+| btype               { $1 }
 
-tApp :: { T.Type }
-tApp : simpleType                 { $1 }
-     | tApp simpleType            { T.TAp $1 $2 }
+-- Handle type application
+btype :: { T.Type }
+: btype atype          { T.TAp $1 $2 }
+| atype                { $1 }
+
+-- Handle base types (vars and parens)
+atype :: { T.Type }
+: var                  { T.TVar (T.Tyvar (tokVal $1) T.Star) }
+| tname                { T.TCon (T.Tycon (tokVal $1) T.Star) } 
+| '(' type ')'			   { $2 }
+  -- TODO: https://github.com/wh5a/thih/blob/master/hatchet/HsParser.ly#L319
+
+
+qtype :: { T.Qual T.Type }
+: '{' preds '}' type      { $2 T.:=> $4 }
+| type                 { [] T.:=> $1 }
+
+----------------------------------------------------------------------------
+
 
 
 ctor :: { Constructor }
-ctor : tname listof(simpleType)   { Constructor $1 $2 }
-     | tname                      { Constructor $1 [] }
+ctor : tname listof(atype)        { Constructor (tokVal $1) $2 }
+     | tname                      { Constructor (tokVal $1) [] }
 
 ctors :: { [Constructor] }
 ctors : ctor                      { [$1] }
       | ctor pipe ctors           { $1 : $3 }
 
 
-qualtype :: { T.Qual T.Type }
-qualtype : preds '=>' type         { $1 T.:=> $3 }
-         | type                    { [] T.:=> $1 } 
-
 preds :: { [T.Pred] }
 preds : pred                      { [$1] }
       | pred pipe preds           { $1 : $3 }
 
 pred :: { T.Pred }
-pred : tname simpleType           { T.IsIn $1 $2 }
+pred : tname atype                { T.IsIn (tokVal $1) $2 }
 
+
+-------------------------------------------------------------------------------
 
 listof(p) : p                   { [$1] }
           | p listof(p)         { $1 : $2 }
 
-{
 
+listofSep(p, s)
+: p                             { [$1] }
+| p s listofSep(p, s)           { $1 : $3 }
+
+{
 
 toRange :: (Locatable a, Locatable b) => a -> b -> SourceRange
 toRange a b = mergeRange (locate a) (locate b)

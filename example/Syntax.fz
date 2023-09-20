@@ -1,0 +1,54 @@
+class Show a {
+  def show :: a -> String
+}
+
+class Monad m {
+  def (>>=)  :: m a -> (a -> m b) -> m b
+  def (>>)   :: m a -> m b -> m b
+  def return :: a -> m a
+}
+
+
+class Num a {
+  super Ord a, Example a
+
+  def (+) :: a -> a -> a
+  def (-) :: a -> a -> a
+  def (*) :: a -> a -> a
+  def (/) :: a -> a -> a
+  def negate :: a -> a
+  def fromInt :: Int -> a
+}
+
+impl Num Int {
+  def a + b = -- ...
+  -- ...
+}
+
+def square :: Int -> Int
+  | square x = x * x
+  | square 0 = 0
+
+def square' x = x * x * x
+
+def cube :: Num a => a -> a
+  | cube 0 = 0
+  | cube x = x * x * x
+
+data Bool = True | False
+
+
+def not :: Bool -> Bool
+  | not True = False
+  | not False = True
+
+
+def safediv :: Int -> Int -> Maybe Int
+  | safediv n d = if d == 0
+                  then Nothing
+                  else Just (n / d)
+def wouldSafeDiv n d =
+  match safediv n d
+    | Just x  -> True
+    | Nothing -> False
+  end
