@@ -213,7 +213,31 @@ tiPat :: Pat -> TI ([Pred], [Assump], Type)
 tiPat (PVar i) = do
   v <- newTVar Star
   return ([], [i :>: toScheme v], v)
+-- For a wildcard, simply create a new type
+tiPat PWildcard = do
+  v <- newTVar Star
+  return ([], [], v)
+-- For "as" patterns (a@pat), simply infer the type of the pat
+-- and name that assumption according to the id before the '@'
+tiPat (PAs id pat) = do
+  (ps, as, t) <- tiPat pat
+  return (ps, (id :>: toScheme t) : as, t)
 
+-- For a constructor pattern
+tiPat (PCon (i :>: sc) pats) = do
+  -- Infer the types of the pattern matched arguments
+  (ps, as, ts) <- tiPats pats
+  -- create a new type
+  t' <- newTVar Star
+  -- create a new instance of the type assumed in the constructor
+  -- arg. We then unify this new type with the
+  (qs :=> t) <- freshInst sc
+  unify t (foldr fn t' ts)
+  return (ps ++ qs, as, t')
+--
+--
+--
+-- Infer on many patterns
 tiPats :: [Pat] -> TI ([Pred], [Assump], [Type])
 tiPats pats = do
   psasts <- mapM tiPat pats

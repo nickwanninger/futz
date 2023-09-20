@@ -6,7 +6,8 @@ import Control.Lens
 import Data.Foldable
 import Data.List (intercalate)
 import Data.Traversable
-import qualified Futz.Types as T
+-- The futz packages
+import Futz.Types
 
 type Var = String
 
@@ -28,7 +29,7 @@ data Exp a
   | Lambda a Var (Exp a) -- Expressions w/ a body
   | App a (Exp a) (Exp a) -- Application
   | Inf a Var (Exp a) (Exp a) -- An infix op (ex: `Inf + 1 2`)
-  | NativeCall a Var T.Type [Exp a] -- A native, uncurried, magic runtime call. The return type given is trusted, and the types of the arguments must be concrete.
+  | NativeCall a Var Type [Exp a] -- A native, uncurried, magic runtime call. The return type given is trusted, and the types of the arguments must be concrete.
   deriving (Eq)
 
 -- makePrisms ''Exp
@@ -90,7 +91,7 @@ visitExp f e = case e of
 visitDef :: Monad m => (Exp a -> m (Exp a)) -> Definition a -> m (Definition a)
 visitDef f = return -- TODO! This is a NO-OP
 
-data Constructor = Constructor T.Id [T.Type]
+data Constructor = Constructor Id [Type]
   deriving (Eq)
 
 instance Show Constructor where
@@ -98,11 +99,11 @@ instance Show Constructor where
 
 data TopLevel a
   = TopDefn [DefnPart a]
-  | DataDecl T.Id [T.Id] [Constructor]
+  | DataDecl Id [Id] [Constructor]
   deriving (Eq)
 
 data DefnPart a
-  = DefnType Var (T.Qual T.Type)
+  = DefnType Var (Qual Type)
   | DefnBind Var (Binding a)
   deriving (Eq)
 
@@ -118,15 +119,22 @@ instance Show (TopLevel a) where
 newtype Argument = Named Var
   deriving (Eq, Show)
 
-newtype Pat = PVar Var
+data Pat
+  = PVar Var -- Not a pattern, simple match
+  | PWildcard -- wildcard: `_`
+  | PAs Var Pat -- binding + match: `a@(...)`
+  | PCon Assump [Pat] -- constructor matching: `Ctor a b ...`
   deriving (Eq)
 
 instance Show Pat where
   show (PVar v) = v
+  show PWildcard = "_"
+  show (PAs id pat) = id <> "@" <> show pat
+  show (PCon (id :>: _) pats) = show id <> " " <> unwords (map show pats)
 
 -- A typed definition of some binding. The type can be `Nothing`,
 -- which indicates it must be inferred.
-data Definition a = Definition Var (Maybe T.Scheme) [Binding a]
+data Definition a = Definition Var (Maybe Scheme) [Binding a]
   deriving (Eq, Show)
 
 -- A binding represents the pattern matching on the left side, and the
@@ -142,17 +150,17 @@ bindingPatterns (Binding ps _) = ps
 
 -- Convert a constructor of a data definition to a list of
 -- definitions, which are internally calls to the native allocation function.
--- This will return the type `T.Type`, and will trust that the constructor
+-- This will return the type `Type`, and will trust that the constructor
 -- arguments have been verified and are correct. No internal validation
 -- is performed.
-generateConstructor :: T.Id -> [T.Id] -> Constructor -> Definition a
+generateConstructor :: Id -> [Id] -> Constructor -> Definition a
 generateConstructor name targs c@(Constructor id args) = def
   where
     -- We will allow type inference to choose the type of this function.
-    def = Definition id (Just (T.quantify (T.tv ft) ([] T.:=> ft))) []
-    rt = T.fromDataDecl name targs -- return type
+    def = Definition id (Just (quantify (tv ft) ([] :=> ft))) []
+    rt = fromDataDecl name targs -- return type
     -- Generate a function type for this definition type
-    ft = foldr T.fn rt args
+    ft = foldr fn rt args
 
 -- args = zipWith (\_ i -> Var nullSourceRange ("a" <> show i)) args [0 ..]
 -- pats = []
@@ -181,7 +189,7 @@ progAddBinding prog id b = progModDef prog id mod
   where
     mod (Definition name t bs) = Definition name t (b : bs)
 
-progAttachScheme :: Program a -> Var -> T.Scheme -> Program a
+progAttachScheme :: Program a -> Var -> Scheme -> Program a
 progAttachScheme prog id sc = progModDef prog id mod
   where
     mod (Definition name _ bs) = Definition name (Just sc) bs
@@ -197,10 +205,10 @@ fuseProgram (t : ts) = case t of
     prog = fuseProgram ts
 
     addDefnPart :: Program a -> DefnPart a -> Program a
-    addDefnPart p (DefnType id t) = progAttachScheme p id (T.quantify (T.tv t) t)
+    addDefnPart p (DefnType id t) = progAttachScheme p id (quantify (tv t) t)
     addDefnPart p (DefnBind id b) = progAddBinding p id b
     -- Given a constructor, convert it to
-    addDataCtor :: T.Id -> [T.Id] -> Program a -> Constructor -> Program a
+    addDataCtor :: Id -> [Id] -> Program a -> Constructor -> Program a
     addDataCtor name targs p c@(Constructor id _) = progAddDefinition p id (generateConstructor name targs c)
 fuseProgram [] = Program {defs = []}
 
