@@ -1,9 +1,10 @@
-
+-- A bunch of arithmetic instructions
+-- TODO: move this to a class (Num)
 def (+) :: Int -> Int -> Int
   | a + b = #(addInt :: Int | a | b )
 
 def (-) :: Int -> Int -> Int
-  | a - b = #(addInt :: Int | a | b )
+  | a - b = #(subInt :: Int | a | b )
 
 def (*) :: Int -> Int -> Int
   | (*) a b = #(mulInt :: Int | a | b )
@@ -14,17 +15,52 @@ def (/) :: Int -> Int -> Int
 def (==) :: Int -> Int -> Bool
   | a == b = #(eqInt :: Bool | a | b )
 
+data Bool = True | False
+-- data Unit = Unit
 data Maybe a = Just a | Nothing
 
-def safediv x y = if y == 0 then Nothing else Just (x / y)
+-- def f . g = fn x -> f (g x)
+-- def (>>=) :: m a -> (a -> m b) -> m b
+-- def safediv :: Int -> Int -> Maybe Int
+--   | safediv n d = if d == 0 then Nothing else Just 4
+-- def foo x y = (safediv x y) >>= (fn val -> Just val)
 
-def sum n =
-    if n == 1 then
-       1
-    else 
-       let f x = id of n + x
-         | id x = x
-        in f (sum (n - 1))
+-- data List a = Cons a (List a) | Nil
+-- data Pair a b = Pair a b
+
+-- data SF a b = SF (a -> (Pair b (SF a b)))
+-- def arr f = 
+--       let result = SF (fn x -> (Pair (f x) result))
+--        in result
+-- def (SF f1) >>> (SF f2) =
+--   let fr x = let (Pair r1 sf1) = f1 x
+--                | (Pair r2 sf2) = f2 r1
+--               in Pair r2 (sf1 >>> sf2)
+--    in SF fr
+
+-- def foo :: Int
+--   | foo = 4
+--
+-- def x ?= d = match x { Just a => a;
+--                        Nothing => 4 }
+
+
+data Tree a = Branch (Tree a) (Tree a) | Leaf a
+
+def sumTree t =
+    match t { Branch l r => (sumTree l) + (sumTree r);
+              Leaf a => a }
+
+
+-- def sum n =
+--     if n == 1 then
+--        n
+--     else 
+--        let f x = n + x
+--         in f (sum (n - 1))
+
+-- def foo (Some x) = x
+--   | foo (None) = 0
 
 -- let rec sum n =
 --   if n = 1 then

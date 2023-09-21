@@ -1,7 +1,7 @@
 {
 module Futz.Parser where
 import Futz.Lexer
-import qualified Futz.Types as T
+import Futz.Types
 import Futz.Syntax
 }
 
@@ -12,16 +12,18 @@ import Futz.Syntax
 %token
 
     -- Match syntax
-    let  { Tok _ LSyntax "let" }
-    in   { Tok _ LSyntax "in" }
-    of   { Tok _ LSyntax "of" }
-    if   { Tok _ LSyntax "if" }
-    then { Tok _ LSyntax "then" }
-    else { Tok _ LSyntax "else" }
-    data { Tok _ LSyntax "data" }
-    def  { Tok _ LSyntax "def" }
+    let      { Tok _ LSyntax "let" }
+    in       { Tok _ LSyntax "in" }
+    of       { Tok _ LSyntax "of" }
+    if       { Tok _ LSyntax "if" }
+    then     { Tok _ LSyntax "then" }
+    else     { Tok _ LSyntax "else" }
+    data     { Tok _ LSyntax "data" }
+    match    { Tok _ LSyntax "match" }
+    def      { Tok _ LSyntax "def" }
 
     pipe   { Tok _ LPipe _ }
+    ';'    { Tok _ LSemiColon _ }
     '=>'   { Tok _ LOp "=>" }
     '#'   { Tok _ LOp "#" }
 
@@ -65,8 +67,9 @@ top : statement            { [$1] }
     | statement top   { $1 : $2 }
 
 statement
-  : sol def defnparts                            { TopDefn $3 }
+  : sol def defnparts                           { TopDefn $3 }
   | sol data tname listof(var) '=' ctors        { DataDecl (tokVal $3) (map tokVal $4) $6 }
+  | sol data tname '=' ctors                    { DataDecl (tokVal $3) [] $5 }
 
 defnparts :: { [DefnPart SourceRange] }
 defnparts : defnpart                       { [$1] }
@@ -75,7 +78,7 @@ defnparts : defnpart                       { [$1] }
 
 defnpart :: { DefnPart SourceRange }
 defnpart : var binding                   { DefnBind (tokVal $1) $2 }
-         | pat op pat '=' exp            { DefnBind (tokVal $2) (Binding [$1, $3] $5)}
+         | pat0 op pat0 '=' exp          { DefnBind (tokVal $2) (Binding [$1, $3] $5)}
          | '(' op ')' binding            { DefnBind (tokVal $2) $4 }
          -- Type definitions
          | var "::" qtype                { DefnType (tokVal $1) $3 }
@@ -83,12 +86,20 @@ defnpart : var binding                   { DefnBind (tokVal $1) $2 }
 
 
 binding :: { Binding SourceRange }
-binding : listof(pat) '=' exp      { Binding $1 $3 }
-        | '=' exp                  { Binding [] $2 }
+: listof(pat0) '=' exp      { Binding $1 $3 }
+| '=' exp                   { Binding [] $2 }
 
 
-pat :: { Pat }
-pat : var                      { PVar (tokVal $1) }
+pat0 :: { Pat }
+: var                               { PVar (tokVal $1) }
+| '(' pat1 ')'                      { $2 }
+
+
+pat1 :: { Pat }
+: var                               { PVar (tokVal $1) }
+| tname listof(pat0)                { PCon ((tokVal $1) :>: emptyScheme) $2 }
+| tname                             { PCon ((tokVal $1) :>: emptyScheme) [] }
+
 
 -------------------------------------------------------------------------------
 
@@ -98,6 +109,7 @@ exp
 : let letdefs in exp              { Let (toRange $1 $4) $2 $4 }
 | if exp then exp else exp        { IfElse (toRange $1 $6) $2 $4 $6 }
 | 'λ' args0 '->' exp              { expandLambdaArguments $2 (toRange $1 $4) $4 }
+| matchExp                        { $1 }
 | var                             { Var (toRange $1 $1) (tokVal $1) }
 | expapp                          { $1 }
 | atom of exp                     { App (toRange $1 $3) $1 $3 }
@@ -132,7 +144,21 @@ letdefs
 | letdef pipe letdefs          { $1 : $3 }
 
 letdef :: { Definition SourceRange }
-: var binding                          { Definition (tokVal $1) Nothing [$2] }
+: var binding                  { Definition (tokVal $1) Nothing [$2] }
+
+
+
+-------------------------------------------------------------------------------
+
+matchExp :: { Exp SourceRange }
+: match exp '{' matchArms '}'          { Match (toRange $1 $5) $2 $4 }
+
+matchArms :: { [MatchArm SourceRange] }
+: matchArm                   { [$1] }
+| matchArm ';' matchArms    { $1 : $3 }
+
+matchArm :: { MatchArm SourceRange }
+: pat1 '=>' exp              { MatchArm $1 $3 }
 
 -------------------------------------------------------------------------------
 
@@ -140,39 +166,37 @@ argument :: { Argument }
 argument : var                    { Named (tokVal $1) }
 
 args :: { [Argument] }
-args : argument                   { [$1] }
-     | argument args              { $1 : $2 }
-
+: argument              { [$1] }
+| argument args         { $1 : $2 }
 
 args0 :: { [Var] }
-args0 : var                   { [tokVal $1] }
-                | var args0   { (tokVal $1) : $2 }
-
+: var                   { [tokVal $1] }
+| var args0             { (tokVal $1) : $2 }
 
 -------------------------------------------------------------------------------
 
 
 -- Handle function types
-type :: { T.Type }
-: btype '->' type     { T.fn $1 $3 }
+type :: { Type }
+: btype '->' type     { fn $1 $3 }
 | btype               { $1 }
 
 -- Handle type application
-btype :: { T.Type }
-: btype atype          { T.TAp $1 $2 }
+btype :: { Type }
+: btype atype          { TAp $1 $2 }
 | atype                { $1 }
 
 -- Handle base types (vars and parens)
-atype :: { T.Type }
-: var                  { T.TVar (T.Tyvar (tokVal $1) T.Star) }
-| tname                { T.TCon (T.Tycon (tokVal $1) T.Star) } 
+atype :: { Type }
+: var                  { TVar (Tyvar (tokVal $1) Star) }
+| tname                { TCon (Tycon (tokVal $1) Star) } 
 | '(' type ')'			   { $2 }
   -- TODO: https://github.com/wh5a/thih/blob/master/hatchet/HsParser.ly#L319
 
 
-qtype :: { T.Qual T.Type }
-: '{' preds '}' type      { $2 T.:=> $4 }
-| type                 { [] T.:=> $1 }
+qtype :: { Qual Type }
+: '{' preds '}' type      { $2 :=> $4 }
+| type                    { [] :=> $1 }
 
 ----------------------------------------------------------------------------
 
@@ -187,12 +211,12 @@ ctors : ctor                      { [$1] }
       | ctor pipe ctors           { $1 : $3 }
 
 
-preds :: { [T.Pred] }
+preds :: { [Pred] }
 preds : pred                      { [$1] }
       | pred pipe preds           { $1 : $3 }
 
-pred :: { T.Pred }
-pred : tname atype                { T.IsIn (tokVal $1) $2 }
+pred :: { Pred }
+pred : tname atype                { IsIn (tokVal $1) $2 }
 
 
 -------------------------------------------------------------------------------
@@ -206,6 +230,9 @@ listofSep(p, s)
 | p s listofSep(p, s)           { $1 : $3 }
 
 {
+emptyScheme :: Scheme
+emptyScheme = quantify (tv t) ([] :=> t)
+  where t = TGen 0
 
 toRange :: (Locatable a, Locatable b) => a -> b -> SourceRange
 toRange a b = mergeRange (locate a) (locate b)

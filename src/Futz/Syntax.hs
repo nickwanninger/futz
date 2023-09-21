@@ -30,7 +30,9 @@ data Exp a
   | App a (Exp a) (Exp a) -- Application
   | Inf a Var (Exp a) (Exp a) -- An infix op (ex: `Inf + 1 2`)
   | NativeCall a Var Type [Exp a] -- A native, uncurried, magic runtime call. The return type given is trusted, and the types of the arguments must be concrete.
+  | Match a (Exp a) [MatchArm a]
   deriving (Eq)
+
 
 -- makePrisms ''Exp
 
@@ -58,6 +60,7 @@ instance Show (Exp a) where
   show (App _ f a) = "(" <> show f <> " " <> show a <> ")"
   show (Inf _ op l r) = "(" <> show l <> " " <> op <> " " <> show r <> ")"
   show (NativeCall _ name t args) = "#(" <> name <> " :: " <> show t <> " | " <> intercalate " | " (map show args) <> ")"
+  show (Match _ e arms) = "match " <> show e <> " { " <> intercalate "; " (map show arms) <> " }"
 
 -- Apply a transformation function to each expression in an expression tree
 visitExp :: Monad m => (Exp a -> m (Exp a)) -> Exp a -> m (Exp a)
@@ -91,6 +94,13 @@ visitExp f e = case e of
 visitDef :: Monad m => (Exp a -> m (Exp a)) -> Definition a -> m (Definition a)
 visitDef f = return -- TODO! This is a NO-OP
 
+
+data MatchArm a = MatchArm Pat (Exp a)
+  deriving (Eq)
+
+instance Show (MatchArm a) where
+  show (MatchArm p e) = show p <> " => " <> show e
+
 data Constructor = Constructor Id [Type]
   deriving (Eq)
 
@@ -109,7 +119,7 @@ data DefnPart a
 
 instance Show (DefnPart a) where
   show (DefnType id t) = id <> " :: " <> show t
-  show (DefnBind id b) = id <> show b
+  show (DefnBind id b) = id <> " " <> show b
 
 instance Show (TopLevel a) where
   show :: TopLevel a -> String
@@ -130,7 +140,8 @@ instance Show Pat where
   show (PVar v) = v
   show PWildcard = "_"
   show (PAs id pat) = id <> "@" <> show pat
-  show (PCon (id :>: _) pats) = show id <> " " <> unwords (map show pats)
+  show (PCon (id :>: _) []) = id
+  show (PCon (id :>: _) pats) = id <> " " <> unwords (map show pats)
 
 -- A typed definition of some binding. The type can be `Nothing`,
 -- which indicates it must be inferred.
@@ -232,6 +243,7 @@ data Lexeme
   | LLambda
   | LOf
   | LPipe
+  | LSemiColon
   | LIsType
   deriving (Eq, Show)
 

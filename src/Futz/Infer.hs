@@ -53,8 +53,18 @@ getSubst = do
 unify :: Type -> Type -> TI ()
 unify t1 t2 = do
   s <- getSubst
-  u <- liftEither $ mgu (apply s t1) (apply s t2)
+  let t1' = apply s t1
+  let t2' = apply s t2
+  u <- liftEither $ mgu t1' t2'
   extSubst u
+
+unifyList :: [Type] -> TI ()
+unifyList [] = return ()
+unifyList [_] = return ()
+unifyList (t1 : t2 : ts) =
+  do
+    unify t1 t2
+    unifyList (t2 : ts)
 
 -- For clarity, we define the operation that extends the substitution as a separate function,
 -- even though it is used only here in the definition of unify:
@@ -146,10 +156,11 @@ tiExpr ce as e = case e of
 
     (qs, t) <- tiExpr ce (as' ++ as) e
     return (ps ++ qs, t)
+
+  -- type infer literal integers
   Lit _ (LitInt _) -> do
     v <- newTVar Star
     return ([IsIn "Num" v], v)
-  -- return ([], tInt)
 
   -- variable inference is just a lookup
   Var _ i -> case findAssump i as of
@@ -178,12 +189,21 @@ tiExpr ce as e = case e of
     (ps, as') <- tiDefinitions ce as [Definition tmpVar Nothing [Binding [PVar a] x]]
     (qs, t) <- tiExpr ce (as' ++ as) (Var ann tmpVar)
     return (ps ++ qs, t)
-  -- Simple appication
-  App _ e f -> do
-    (ps, te) <- tiExpr ce as e
-    (qs, tf) <- tiExpr ce as f
+
+  -- Application: the core of a good programming language. First, we
+  -- infer the type of both the function and the
+  App _ a b -> do
+    -- Infer the function (a)
+    (ps, ta) <- tiExpr ce as a
+    -- Infer the argument (b)
+    (qs, tb) <- tiExpr ce as b
+    -- Create a new type to represent the type
+    -- of the result of this application
     t <- newTVar Star
-    unify (tf `fn` t) te
+    -- Unify the type of a (the function) with a new type which
+    -- takes b (the arg) and returns some new type.
+    unify (tb `fn` t) ta
+    -- Then simply return the new t we created
     return (ps ++ qs, t)
 
   -- Infix syntax is just a magic version of apply
@@ -197,9 +217,39 @@ tiExpr ce as e = case e of
       then return ([], t) -- There are no vars. All good!
       else throwError (makeExpressionTypeError e "Native calls must not have type variables")
 
+  -- a match satement is basically a series of `Binding` values in fancy clothes.
+  -- The key observation is that each of them must have the same type for the pattern,
+  -- and the same type for the resulting value
+  Match _ e arms -> do
+    -- Create a new type to represent the type
+    -- of the result of this match expression
+    t <- newTVar Star
+    -- Infer the type of the matchee (in `match x {}`, x is the matchee)
+    (ps, te) <- tiExpr ce as e
+    -- infer the types of the arms
+    r <- mapM (tiMatchArm ce as) arms
+    -- extract the pattern types...
+    let pts = map (fst . snd) r
+    -- and unify them together and with the matchee
+    unifyList (te:pts)
+    -- extract the body types...
+    let bts = map (snd . snd) r
+    -- and unify them with the result variable we made above
+    unifyList (t:bts)
+    -- extract the predicates
+    let ps' = foldl (++) ps (map fst r)
+    -- and return them with the unified result type
+    return (ps', t)
+
+tiMatchArm :: Infer (MatchArm SourceRange) (Type, Type)
+tiMatchArm ce as arm@(MatchArm p e) = do
+  (ps, as', tp) <- tiPat p as
+  (qs, te) <- tiExpr ce (as' ++ as) e
+  return (ps ++ qs, (tp, te))
+
 tiBinding :: Infer (Binding SourceRange) Type
 tiBinding ce as (Binding pats e) = do
-  (ps, as', ts) <- tiPats pats
+  (ps, as', ts) <- tiPats pats as
   (qs, t) <- tiExpr ce (as' ++ as) e
   return (ps ++ qs, foldr fn t ts)
 
@@ -209,38 +259,52 @@ tiBindings ce as bindings t = do
   mapM_ (unify t . snd) psts
   return (concatMap fst psts)
 
-tiPat :: Pat -> TI ([Pred], [Assump], Type)
-tiPat (PVar i) = do
-  v <- newTVar Star
-  return ([], [i :>: toScheme v], v)
--- For a wildcard, simply create a new type
-tiPat PWildcard = do
-  v <- newTVar Star
-  return ([], [], v)
--- For "as" patterns (a@pat), simply infer the type of the pat
--- and name that assumption according to the id before the '@'
-tiPat (PAs id pat) = do
-  (ps, as, t) <- tiPat pat
-  return (ps, (id :>: toScheme t) : as, t)
+--
+-- Type inference for pattern expressions - expressions used in pattern matching
+--
+tiPat :: Pat -> [Assump] -> TI ([Pred], [Assump], Type)
+tiPat p as = case p of
+  -- Simple variable matching. Not conditional, just a simple binding.
+  PVar i -> do
+    v <- newTVar Star
+    return ([], [i :>: toScheme v], v)
 
--- For a constructor pattern
-tiPat (PCon (i :>: sc) pats) = do
-  -- Infer the types of the pattern matched arguments
-  (ps, as, ts) <- tiPats pats
-  -- create a new type
-  t' <- newTVar Star
-  -- create a new instance of the type assumed in the constructor
-  -- arg. We then unify this new type with the
-  (qs :=> t) <- freshInst sc
-  unify t (foldr fn t' ts)
-  return (ps ++ qs, as, t')
+  -- Wildcard matching
+  PWildcard -> do
+    v <- newTVar Star
+    return ([], [], v)
+
+  -- For "as" patterns (a@pat), simply infer the type of the pat
+  -- and name that assumption according to the id before the '@'
+  PAs id pat -> do
+    (ps, as, t) <- tiPat pat as
+    return (ps, (id :>: toScheme t) : as, t)
+
+  -- For a constructor pattern
+  PCon (i :>: _) pats ->
+    -- Lookup the constructor's ID in the assumption list, assuming the constructor
+    -- function has an assumption.
+    case findAssump i as of
+      Nothing -> throwError $ TEGeneric ("Failed: constructor " <> i <> " not defined")
+      Just sc -> do
+        (qs :=> t) <- freshInst sc
+        -- Infer the types of the pattern matched arguments
+        (ps, as, ts) <- tiPats pats as
+        -- create a new type
+        t' <- newTVar Star
+        let ft = foldr fn t' ts
+        -- create a new instance of the type assumed in the constructor
+        -- arg. We then unify this new type with the
+        unify t ft
+        return (ps ++ qs, as, t')
+
 --
 --
 --
--- Infer on many patterns
-tiPats :: [Pat] -> TI ([Pred], [Assump], [Type])
-tiPats pats = do
-  psasts <- mapM tiPat pats
+-- Infer on a list of patterns
+tiPats :: [Pat] -> [Assump] -> TI ([Pred], [Assump], [Type])
+tiPats pats as = do
+  psasts <- mapM (`tiPat` as) pats
   let ps = concat [ps' | (ps', _, _) <- psasts]
       as = concat [as' | (_, as', _) <- psasts]
       ts = [t | (_, _, t) <- psasts]
@@ -272,7 +336,7 @@ tiExplicitBinding ce as ex@(Expl i sc alts) =
         ps' = filter (not . entail ce qs') (apply s ps)
     (ds, rs) <- split ce fs gs ps'
     if sc /= sc'
-      then liftEither $ genericTypeError ("signature too general" <> show ex <> " sc:" <> show sc <> " sc':" <> show sc')
+      then liftEither $ genericTypeError ("signature too general:\n\t" <> show ex <> "\n\tsc:" <> show sc <> "\n\tsc':" <> show sc')
       else
         if not (null rs)
           then liftEither $ genericTypeError "context too weak"

@@ -53,7 +53,7 @@ instance Show Type where
   show ap@(TAp a@(TAp t a') b)
     | t /= tArrow = plainShowAp a b
     | isArrowType a' = "(" <> show a' <> ") -> " <> show b
-    | otherwise = "(" <> show a' <> " -> " <> show b <> ")"
+    | otherwise = show a' <> " -> " <> show b
   show (TAp a b) = plainShowAp a b
   -- Unsure how to show this. I'll just show them as invalid syntax for now.
   show (TGen i) = greekify i
@@ -684,7 +684,7 @@ data Scheme = Forall [Kind] (Qual Type)
   deriving (Eq)
 
 instance Show Scheme where
-  show (Forall [] t) = show t
+  -- show (Forall [] t) = show t
   show (Forall ks t) = "∀{" <> intercalate "," (map show ks) <> "} " <> show t
 
 -- There is no direct equivalent of Forall in the syntax of Haskell. Instead, implicit

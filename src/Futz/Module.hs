@@ -53,7 +53,7 @@ load name = do
         Right env -> do
           -- print env
           let as = Prelude.map initialAssumption (defs program)
-          mapM_ print as
+          -- mapM_ print as
           case Infer.tiProgram env as [program] of
             Left tErr -> do
               putStr (show tErr)

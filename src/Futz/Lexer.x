@@ -22,7 +22,7 @@ $unisymbol = [] -- TODO
 $symbol    = [$ascsymbol $unisymbol] # [$special \_\:\"\']
 
 @syntax = 
-	let|in|of|if|then|else|data|def
+	let|in|of|if|then|else|data|def|match
 
 $large     = [A-Z \xc0-\xd6 \xd8-\xde]
 $small     = [a-z \xdf-\xf6 \xf8-\xff \_]
@@ -45,6 +45,7 @@ tokens :-
   \{                            { mkL LLCurly }
   \}                            { mkL LRCurly }
   \->                           { mkL LArrow }
+  \;                            { mkL LSemiColon }
   λ                             { mkL LLambda }
   "fn"                          { mkL LLambda }
   \|                            { mkL LPipe }
