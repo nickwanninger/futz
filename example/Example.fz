@@ -19,11 +19,16 @@ data Bool = True | False
 -- data Unit = Unit
 data Maybe a = Just a | Nothing
 
--- def f . g = fn x -> f (g x)
--- def (>>=) :: m a -> (a -> m b) -> m b
--- def safediv :: Int -> Int -> Maybe Int
---   | safediv n d = if d == 0 then Nothing else Just 4
--- def foo x y = (safediv x y) >>= (fn val -> Just val)
+def f . g = fn x -> f (g x)
+
+def (>>=) :: m a -> (a -> m b) -> m b
+def safediv n d = if d == 0 then Nothing else Just (n / d)
+def foo x y = (safediv x y) >>= (fn val -> Just val)
+
+
+def default x d = match x of
+  Just x => x
+  Nothing => d
 
 -- data List a = Cons a (List a) | Nil
 -- data Pair a b = Pair a b
@@ -45,12 +50,7 @@ data Maybe a = Just a | Nothing
 --                        Nothing => 4 }
 
 
-data Tree a = Branch (Tree a) (Tree a) | Leaf a
-
-def sumTree t =
-    match t { Branch l r => (sumTree l) + (sumTree r);
-              Leaf a => a }
-
+-- data Tree a = Branch (Tree a) (Tree a) | Leaf a
 
 -- def sum n =
 --     if n == 1 then

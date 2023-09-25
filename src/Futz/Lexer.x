@@ -4,6 +4,8 @@ module Futz.Lexer where
 import Data.Char (chr)
 import Futz.Syntax
 
+import Futz.Lexer.Layout
+
 -- A good example of a parser can be found here:
 -- https://github.com/haskell/alex/blob/master/examples/haskell.x
 
@@ -22,7 +24,10 @@ $unisymbol = [] -- TODO
 $symbol    = [$ascsymbol $unisymbol] # [$special \_\:\"\']
 
 @syntax = 
-	let|in|of|if|then|else|data|def|match
+	def|in|if|then|else|data|match|let
+
+@layout =
+  do|of
 
 $large     = [A-Z \xc0-\xd6 \xd8-\xde]
 $small     = [a-z \xdf-\xf6 \xf8-\xff \_]
@@ -31,9 +36,11 @@ $graphic   = [$small $large $symbol $digit $special \:\"\']
 $idchar    = [$alpha $digit \_ \']
 
 tokens :-
-  $white+                       ;
-  "--".*                        ;
+  [\ \t\n]+                       ;
+  -- \n                            { mkL LNewline }
+  "--".* \n                        ;
   @syntax                       { mkL LSyntax }
+  @layout                       { mkL LStartLayout }
   $digit+                       { mkL LInt }
   \=                            { mkL LEq }
   -- \+                            { mkL LPlus }
@@ -42,10 +49,12 @@ tokens :-
   -- \/                            { mkL LDiv }
   \(                            { mkL LLParen }
   \)                            { mkL LRParen }
-  \{                            { mkL LLCurly }
-  \}                            { mkL LRCurly }
   \->                           { mkL LArrow }
-  \;                            { mkL LSemiColon }
+  -- Explicit Layout
+  \{                            { mkL LOpen }
+  \}                            { mkL LClose }
+  \;                            { mkL LSemi }
+
   λ                             { mkL LLambda }
   "fn"                          { mkL LLambda }
   \|                            { mkL LPipe }
@@ -81,11 +90,24 @@ scanLoop i = do
     -- If we hit the EOF token, 
     TEndOfFile -> return i
     -- If a token is the first token on a line, prepend it with a "TStartOfLine" token
-    (Tok (Pos _ 1) _ _) -> scanLoop (i ++ [TStartOfLine, tok])
+    -- (Tok (Pos _ 1) _ _) -> scanLoop (i ++ [TStartOfLine, tok])
     _ -> scanLoop (i ++ [tok])
 
 
+-- This function parses the tokens directly from the source text
 scanTokens str = runAlex str $ scanLoop []
+
+
+
+lex :: String -> Either String [Token]
+-- First, scan the raw tokens that the programmer
+-- themselves wrote, then run that result through
+-- `layout`, which will insert "virtual" tokens
+-- (that they did not type) to enable indentation
+-- sensitive layouts
+lex str = scanTokens str >>= layout
+
+
 
 alexEOF = return TEndOfFile
 

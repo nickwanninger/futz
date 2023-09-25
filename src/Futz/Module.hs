@@ -30,7 +30,7 @@ load name = do
   -- TODO: abstract loading and filenames
   contents <- hGetContents handle
   -- Lex the contents of the file
-  case Lexer.scanTokens contents of
+  case Lexer.lex contents of
     -- If the lexer gives us an error, just print it and return Nothing. We
     -- need to make this load function return some kind of error, but I haven't
     -- decided on that representation yet.
@@ -39,7 +39,8 @@ load name = do
       return Nothing
     -- If the tokenization works, parse the AST
     Right tokens -> do
-      -- mapM_ print tokens
+      mapM_ print tokens
+
       let ast = Parser.parseFutz tokens
       mapM_ print ast
       let program = fuseProgram ast

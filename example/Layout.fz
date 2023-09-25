@@ -1,0 +1,4 @@
+data Option a = Just a | None
+
+def x = let y = 4
+         in x + y

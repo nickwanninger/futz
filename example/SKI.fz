@@ -1,0 +1,26 @@
+-- An implementation of S K I combinator calculus
+
+
+
+
+-- I returns its argument:
+def i x = x
+-- K, when applied to any argument x, yields
+-- a one-argument constant function Kx, which,
+-- when applied to any argument y, returns x:
+def k x y = x
+
+
+-- S is a substitution operator. It takes three
+-- arguments and then returns the first argument
+-- applied to the third, which is then applied to
+-- the result of the second argument applied to
+-- the third. More clearly:
+def s x y z = x z (y z)
+
+
+def sii a = s i i a
+
+-- This does not type check!
+-- def y a = s(k(s i i))(s(s(k s)k)(k(s i i))) a
+

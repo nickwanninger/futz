@@ -33,7 +33,6 @@ data Exp a
   | Match a (Exp a) [MatchArm a]
   deriving (Eq)
 
-
 -- makePrisms ''Exp
 
 opSymbols :: String
@@ -93,7 +92,6 @@ visitExp f e = case e of
 
 visitDef :: Monad m => (Exp a -> m (Exp a)) -> Definition a -> m (Definition a)
 visitDef f = return -- TODO! This is a NO-OP
-
 
 data MatchArm a = MatchArm Pat (Exp a)
   deriving (Eq)
@@ -229,6 +227,8 @@ newtype Program a = Program {defs :: [Definition a]}
 -- The token type:
 data Lexeme
   = LSyntax
+  | LStartLayout -- A token which indicates that a layout will start after it
+  | LEndLayout -- A token which indicates that a layout will end before it
   | LInt
   | LSym
   | LType
@@ -237,14 +237,16 @@ data Lexeme
   | LOp -- operator (symbols like +, -, etc)
   | LLParen
   | LRParen
-  | LLCurly
-  | LRCurly
+  | LIsType
   | LArrow
   | LLambda
   | LOf
   | LPipe
-  | LSemiColon
-  | LIsType
+  | LOpen -- {
+  | LClose -- }
+  | LSemi -- ;
+  | LEOF -- an end of file token
+  | LNewline -- This gets removed by the postprocessing pass
   deriving (Eq, Show)
 
 -------------------------------------------------------------------------------
@@ -273,6 +275,7 @@ mergeRange (SourceRange start _) (SourceRange _ end) = SourceRange start end
 -- class, and the raw string value
 data Token
   = Tok Position Lexeme String
+  | VTok Lexeme -- A virtual token, which was not in the source code
   | TStartOfLine
   | TEndOfFile
   deriving (Eq, Show)
@@ -288,6 +291,7 @@ instance Locatable Token where
   locate (Tok (Pos line col) _ s) = SourceRange (Pos line col) (Pos line (col + Prelude.length s))
 
 instance Locatable (Exp SourceRange) where
+  locate :: Exp SourceRange -> SourceRange
   locate (Let r _ _) = r
   locate (Lit r _) = r
   locate (Var r _) = r
@@ -296,3 +300,9 @@ instance Locatable (Exp SourceRange) where
   locate (App r _ _) = r
   locate (Inf r _ _ _) = r
   locate (NativeCall r _ _ _) = r
+
+instance Locatable a => Locatable [a] where
+  locate ls = mergeRange (locate $ head ls) (locate $ last ls)
+
+instance Locatable (MatchArm SourceRange) where
+  locate (MatchArm p e) = locate e -- mergeRange (locate p) (locate e)

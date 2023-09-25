@@ -1,0 +1,211 @@
+
+{
+module Futz.Lexer where
+import Data.Char (chr)
+import Futz.Syntax
+
+import Control.Monad.State
+import Control.Monad.Except
+import Futz.Lexer.Support
+
+import Debug.Trace
+
+import Data.Char (ord)
+
+
+-- A good example of a parser can be found here:
+-- https://github.com/haskell/alex/blob/master/examples/haskell.x
+
+}
+
+%encoding "latin1"
+
+$special   = [\(\)\,\;\[\]\`\{\}]
+
+$ascdigit  = 0-9
+$unidigit  = [] -- TODO
+$digit     = [$ascdigit $unidigit]
+
+$ascsymbol = [\!\#\$\%\&\*\+\.\/\<\=\>\?\@\\\^\|\-\~]
+$unisymbol = [] -- TODO
+$symbol    = [$ascsymbol $unisymbol] # [$special \_\:\"\']
+
+@syntax = 
+	in|of|if|then|else|data|def|match
+
+@layoutSyntax =
+  let|do
+
+$large     = [A-Z \xc0-\xd6 \xd8-\xde]
+$small     = [a-z \xdf-\xf6 \xf8-\xff \_]
+$alpha     = [$small $large]
+$graphic   = [$small $large $symbol $digit $special \:\"\']
+$idchar    = [$alpha $digit \_ \']
+
+tokens :-
+
+
+-- Skip spaces and tabs (not newlines)
+<0> [\ \t]+                       ;
+
+<0> @layoutSyntax                 { layoutKw LSyntax }
+
+<0> @syntax                       { emit LSyntax }
+
+
+<0> $small $idchar*               { emit LSym }
+<0> $ascsymbol $ascsymbol*        { emit LOp }
+<0> $large $idchar*               { emit LType }
+<0> ' $small $idchar*             { emit LTypeVar }
+
+<0> $digit+                       { emit LInt }
+<0> \=                            { emit LEq }
+<0> \(                            { emit LLParen }
+<0> \)                            { emit LRParen }
+
+    -- Explicit layout tokens
+<0> \{                            { emit LOpen }
+<0> \}                            { emit LClose }
+<0> \;                            { emit LSemi }
+--
+-- <0> \->                           { emit LArrow }
+-- <0> λ                             { emit LLambda }
+-- <0> "fn"                          { emit LLambda }
+-- <0> \|                            { emit LPipe }
+-- <0> \::                           { emit LIsType }
+
+
+<0> "--" .* \n                    { \_ _ -> pushStartCode newline *> scan }
+<0> \n                            { \_ _ -> pushStartCode newline *> scan }
+
+<layout> {
+ -- Skip comments and whitespace
+ "--" .* \n                ;
+ \n                        ;
+
+ \{                        { openBrace }
+ ()                        { startLayout }
+}
+
+
+<empty_layout> ()          { emptyLayout }
+
+
+
+<newline> {
+  \n         ;
+  "--" .* \n ;
+  
+  () { offsideRule }
+}
+
+<eof> () { doEOF }
+
+
+{
+
+handleEOF = pushStartCode eof *> scan
+
+doEOF _ pos = do
+  t <- Futz.Lexer.Support.layout
+  case t of
+    Nothing -> do
+      popStartCode
+      pure TEndOfFile
+    _ -> do
+      popLayout
+      emit LVClose "" pos
+
+
+scan :: Lexer Token
+scan = do
+  input@(Input line col _ string) <- gets lexerInput
+  startcode <- startCode
+  case alexScan input startcode of
+    AlexEOF -> handleEOF
+    AlexError (Input _ _ _ inp) -> throwError $ "Lexical error: " ++ show (head inp)
+    AlexSkip input' len -> do
+        modify' $ \s -> s { lexerInput = input' }
+        scan
+    AlexToken input' tokl action -> do
+      modify' $ \s -> s { lexerInput = input' }
+      action (take tokl string) (Pos line col)
+
+
+consume :: Lexer [Token]
+consume = do
+  l <- scan
+  if l == TEndOfFile
+    then do
+      return []
+    else do
+      ls <- consume
+      return (l:ls)
+
+
+layoutKw :: LexAction
+layoutKw l s pos = do
+  pushStartCode Futz.Lexer.layout
+  emit l s pos
+
+
+openBrace _ p = do
+  popStartCode
+  pushLayout ExplicitLayout
+  emit LOpen "" p
+
+
+startLayout s pos = do
+  popStartCode
+  traceM $ "start " <> show pos <> "  " <> (show (map ord s))
+
+  reference <- Futz.Lexer.Support.layout
+  col <- gets (inpColumn . lexerInput)
+  traceM $ "col: " <> show col
+  traceM $ "ref: " <> show reference
+
+  if Just (LayoutColumn col) <= reference
+    then do
+      traceM "empty!"
+      pushStartCode empty_layout
+    else do
+      traceM "New col!"
+      pushLayout (LayoutColumn col)
+
+  emit LVOpen "" pos
+
+
+emptyLayout _ pos = do
+  popStartCode
+  pushStartCode newline
+  emit LVClose "" pos
+
+
+offsideRule _ pos = do
+  context <- Futz.Lexer.Support.layout
+  col <- gets (inpColumn . lexerInput)
+
+  let continue = popStartCode *> scan
+
+  case context of
+    Just (LayoutColumn col') -> do
+      traceM $ "col:  " <> show col
+      traceM $ "col': " <> show col'
+      case col `compare` col' of
+        EQ -> do
+          traceM "EQ"
+          popStartCode
+          emit LVSemi "" pos
+        GT -> do
+          traceM "GT"
+          continue
+        LT -> do
+          traceM "LT"
+          popLayout
+          emit LVClose "" pos
+    _ -> continue
+
+
+
+}
+
