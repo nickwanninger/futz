@@ -1,0 +1,8 @@
+-- should throw a mismatch error
+-- def id x = x
+--   | foo x = x
+
+def id x = x
+
+def id y = y
+  -- | id :: b -> c
