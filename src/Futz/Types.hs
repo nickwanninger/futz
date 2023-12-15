@@ -278,7 +278,7 @@ data Pred = IsIn Id Type
 
 instance Show t => Show (Qual t) where
   show ([] :=> t) = show t
-  show (ps :=> t) = unwords (map show ps) <> " => " <> show t
+  show (ps :=> t) = "some " <> unwords (map show ps) <> " => " <> show t
 
 instance Show Pred where
   show (IsIn id t) = "(" <> id <> " " <> show t <> ")"
@@ -303,7 +303,19 @@ liftPred m (IsIn i t) (IsIn i' t')
 ---- Type Class and Instances
 -- we will represent Class declarations as a class name,
 -- a list of super classes, and a list of instances
-data Class = Class Id [Id] [Inst]
+-- data Class = Class Id [Id] [Inst]
+--   deriving (Eq, Ord, Show)
+data Class = Class
+  { className :: Id, -- in "Monad m", this is "Monad". We ignore the m.
+    classSupers :: [Id], -- The super classes of this class
+    classInsts :: [Inst], -- a list of instances of this class.
+    -- The list of methods expected to be exposed by this class
+    classMethods :: [ClassMethod]
+  }
+  deriving (Eq, Ord, Show)
+
+--
+data ClassMethod = ClassMethod String (Qual Pred)
   deriving (Eq, Ord, Show)
 
 type Inst = Qual Pred
@@ -339,8 +351,8 @@ data ClassEnv = ClassEnv
   }
   deriving (Show)
 
-classes :: ClassEnv -> Id -> Maybe Class
-classes ce i = Map.lookup i (classMap ce)
+getClass :: ClassEnv -> Id -> Maybe Class
+getClass ce i = Map.lookup i (classMap ce)
 
 -- The classes field of ClassEnv is a lambda which returns the class
 -- for a given ID if it matches. See `modifyClassEnv` below for how that works.
@@ -350,20 +362,18 @@ classes ce i = Map.lookup i (classMap ce)
 -- super: get a list of superclasses from a class, `id`
 -- (Does not check that the class exists!)
 super :: ClassEnv -> Id -> [Id]
-super ce i = case classes ce i of Just (Class _ is its) -> is
+super ce i = case getClass ce i of Just c -> classSupers c
 
 -- insts: get a list of instances from a class, `id`
 -- (Does not check that the class exists!)
 insts :: ClassEnv -> Id -> [Inst]
-insts ce i = case classes ce i of
-  Just (Class _ is its) -> its
-  Nothing -> []
+insts ce i = maybe [] classInsts (getClass ce i)
 
 -- These functions are intended to be used only in cases where it
 -- is known that the class i is defined in the environment ce. In
 -- some cases, this condition might be guaranteed by static analysis
 -- prior to type checking. Alternatively, we can resort to a dynamic
--- check by testing defined (classes ce i) before applying either
+-- check by testing defined (getClass ce i) before applying either
 -- function. The function defined used here is defined as follows:
 defined :: Maybe a -> Bool
 defined (Just x) = True
@@ -372,8 +382,8 @@ defined Nothing = False
 -- We will also define a helper function, modifyClassEnv, to describe how
 -- a class environment can be updated to reflect a new binding of
 -- a Class value to a given identifier:
-modifyClassEnv :: ClassEnv -> Id -> Class -> ClassEnv
-modifyClassEnv ce i c =
+classEnvAdd :: ClassEnv -> Id -> Class -> ClassEnv
+classEnvAdd ce i c =
   ce
     { classMap = Map.insert i c (classMap ce)
     }
@@ -413,9 +423,21 @@ infixr 5 <:>
 -- be detected at this stage.
 addClass :: Id -> [Id] -> ClassEnv -> Either TypeError ClassEnv
 addClass i is ce
-  | defined (classes ce i) = genericTypeError ("class " <> i <> " is already defined")
-  | not (all (defined . classes ce) is) = genericTypeError ("superclass not defined (" <> i <> ")")
-  | otherwise = return (modifyClassEnv ce i (Class i is []))
+  | defined (getClass ce i) = genericTypeError ("class " <> i <> " is already defined")
+  | not (all (defined . getClass ce) is) = genericTypeError ("superclass not defined (" <> i <> ")")
+  | otherwise =
+      return
+        ( classEnvAdd
+            ce
+            i
+            ( Class
+                { className = i,
+                  classSupers = is,
+                  classInsts = [],
+                  classMethods = []
+                }
+            )
+        )
 
 -- For example, we can describe the effect of the class declarations in the
 -- Haskell prelude using the following transformer:
@@ -449,19 +471,27 @@ addNumClasses =
     <:> addClass "Floating" ["Fractional"]
     <:> addClass "RealFloat" ["RealFrac", "Floating"]
 
+-- Modify a class, given just it's name. The class must exist.
+modClass :: ClassEnv -> Id -> (Class -> Either TypeError Class) -> Either TypeError ClassEnv
+modClass ce className f = case getClass ce className of
+  Nothing -> genericTypeError ("class not found: " <> className)
+  Just c -> do
+    c' <- f c
+    return (classEnvAdd ce className c')
+
 -- To add a new instance to a class, we must check that the class to
 -- which the instance applies is defined, and that the new instance
 -- does not overlap with any previously declared instance:
 addInst :: [Pred] -> Pred -> ClassEnv -> Either TypeError ClassEnv
-addInst ps p@(IsIn className _) ce
-  | not (defined (classes ce className)) = genericTypeError ("no class for instance " <> className)
-  | any (overlap p) qs = genericTypeError "overlapping instance"
-  | otherwise = return (modifyClassEnv ce className c)
+addInst ps p@(IsIn className _) ce = modClass ce className mod
   where
-    instances = insts ce className
-    supes = super ce className
-    qs = [q | (_ :=> q) <- instances]
-    c = Class className supes ((ps :=> p) : instances)
+    mod c =
+      let instances = classInsts c
+          qs = [q | (_ :=> q) <- instances]
+       in do
+            when (any (overlap p) qs) (genericTypeError "overlapping instance")
+            return c {classInsts = (ps :=> p) : instances}
+
 
 -- Two instances for a class are said to overlap if there is some
 -- predicate that is a substitution instance of the heads of both

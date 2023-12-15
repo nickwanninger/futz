@@ -19,12 +19,18 @@ import Futz.Syntax
     then     { Tok _ LSyntax "then" }
     else     { Tok _ LSyntax "else" }
     data     { Tok _ LSyntax "data" }
+    some     { Tok _ LSyntax "some" }
     match    { Tok _ LSyntax "match" }
+
+    class    { Tok _ LSyntax "class" }
+    end      { Tok _ LSyntax "end" }
     
-    of       { Tok _ LStartLayout "of" }
+    do       { Tok _ LStartLayout "do" }
+    on       { Tok _ LStartLayout "on" }
 
     pipe   { Tok _ LPipe _ }
     '=>'   { Tok _ LOp "=>" }
+    '<-'   { Tok _ LOp "<-" }
     '#'   { Tok _ LOp "#" }
 
     -- Literals
@@ -122,6 +128,7 @@ exp
 -- | 'λ' var '.' exp                 { expandLambdaArguments (map (\x->[x]) (tokVal $2)) (toRange $1 $4) $4 }
 | fn args0 '->' exp               { expandLambdaArguments $2 (toRange $1 $4) $4 }
 | matchExp                        { $1 }
+| doExp                           { $1 }
 | var                             { Var (toRange $1 $1) (tokVal $1) }
 | expapp                          { $1 }
 -- | atom of exp                     { App (toRange $1 $3) $1 $3 }
@@ -163,13 +170,23 @@ letdef :: { Definition SourceRange }
 -------------------------------------------------------------------------------
 
 matchExp :: { Exp SourceRange }
-: match exp of layoutOf(matchArm)     { Match (toRange $1 $4) $2 $4 }
+: match exp on layoutOf(matchArm)     { Match (toRange $1 $4) $2 $4 }
 
 matchArm :: { MatchArm SourceRange }
 : pat1 '=>' exp              { MatchArm $1 $3 }
 
 -------------------------------------------------------------------------------
 
+doExp :: { Exp SourceRange }
+: do layoutOf(doLine)     { desugarDo $ Do (toRange $1 $2) $2 }
+
+doLine :: { DoLine SourceRange }
+: var '<-' exp                  { DLBind (toRange $1 $3) (tokVal $1) $3 }
+| exp                           { DLExp (toRange $1 $1) $1 }
+
+-- : pat1 '=>' exp              { MatchArm $1 $3 }
+
+-------------------------------------------------------------------------------
 argument :: { Argument }
 argument : var                    { Named (tokVal $1) }
 
@@ -203,7 +220,7 @@ atype :: { Type }
 
 
 qtype :: { Qual Type }
-: Open preds Close type   { $2 :=> $4 }
+: some preds '=>' type  { $2 :=> $4 }
 | type                    { [] :=> $1 }
 
 ----------------------------------------------------------------------------

@@ -241,6 +241,15 @@ tiExpr ce as e = case e of
     -- and return them with the unified result type
     return (ps', t)
 
+
+  -- Do _ (l:ls) -> do
+
+
+  Do _ [] -> do
+    t <- newTVar Star
+    return ([], t) -- no assumptions in the base case
+    
+
 tiMatchArm :: Infer (MatchArm SourceRange) (Type, Type)
 tiMatchArm ce as arm@(MatchArm p e) = do
   (ps, as', tp) <- tiPat p as
@@ -480,7 +489,7 @@ defaultSubst ce ts ps = withDefaults (zip . map fst) ce ts ps
 tiProgram :: ClassEnv -> [Assump] -> [Program SourceRange] -> Either TypeError [Assump]
 tiProgram ce as progs = runTI $
   do
-    (ps, as') <- tiSeq tiDefinitions ce as (map defs progs)
+    (ps, as') <- tiSeq tiDefinitions ce as (map programDefs progs)
     s <- getSubst
     rs <- liftEither $ reduce ce (apply s ps)
     s' <- defaultSubst ce [] rs

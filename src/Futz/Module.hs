@@ -1,13 +1,18 @@
 module Futz.Module where
 
+import Control.Monad
+import Control.Monad.Except
 import Data.Either.Combinators
-import Data.Text
+import Data.List
+import Data.List.Unique
+import Data.Text hiding (foldl, length, map, head)
 import qualified Futz.Infer as Infer
 import qualified Futz.Lexer as Lexer
 import qualified Futz.Parser as Parser
 import Futz.Syntax
 import Futz.Types
 import System.IO
+import Text.Pretty.Simple
 
 -- This is a representation of a logical `Module`, which
 -- is effectively the internal data format of a parsed file.
@@ -17,7 +22,8 @@ data Module = Module
     -- The raw AST, in case it's useful to have it around
     ast :: [TopLevel SourceRange],
     -- Bindings
-    program :: Program SourceRange
+    program :: Program SourceRange,
+    dependencies :: [String] -- TODO: figure out how to represent this!
   }
   deriving (Eq, Show)
 
@@ -39,41 +45,81 @@ load name = do
       return Nothing
     -- If the tokenization works, parse the AST
     Right tokens -> do
-      mapM_ print tokens
-
-      let ast = Parser.parseFutz tokens
-      mapM_ print ast
-      let program = fuseProgram ast
-      -- putStrLn "Program:"
-      -- print program
       let env = exampleInsts initialEnv
-      case env of
+      -- pPrint env
+      -- mapM_ print tokens
+      let ast = Parser.parseFutz tokens
+
+      case validate ast of
         Left err -> do
-          putStrLn "Fatal error. Could not setup initial environment!"
+          putStrLn ("Validation failed: " <> show err)
           return Nothing
-        Right env -> do
-          -- print env
-          let as = Prelude.map initialAssumption (defs program)
-          -- mapM_ print as
-          case Infer.tiProgram env as [program] of
-            Left tErr -> do
-              putStr (show tErr)
-              return Nothing
-            Right as' -> do
-              putStrLn "\n\nType Inference:"
-              mapM_ print as'
-              return $ Just Module {name = name, ast = ast, program = program}
+        Right _ -> do
+          mapM_ print ast
+          -- Convert the top level AST nodes to a Program.
+          let program = toProgram ast
+          print program
 
-visit :: Exp a -> IO (Exp a)
-visit (App ann l r) = return (App ann r l)
-visit e = return e
+          return $ Just Module {name = name, ast = ast, program = program, dependencies = []}
 
-dumbScheme :: Qual Type -> Scheme
-dumbScheme t = quantify (tv t) t
+data ValidationError
+  = DuplicateDefinition String
+  | -- A toplevel definition has mismatched names in it's parts
+    DefintionNameMismatch (TopLevel SourceRange)
+  | -- A toplevel definition has too many types
+    DefinitionTooManyTypes (TopLevel SourceRange)
+  deriving (Eq, Show)
 
-initialAssumption :: Definition SourceRange -> Assump
-initialAssumption (Definition id (Just t) _) = id :>: t
-initialAssumption (Definition id Nothing _) = id :>: dumbScheme ([] :=> TVar (tyvar "a"))
+validateTopLevel :: TopLevel SourceRange -> Either ValidationError ()
+validateTopLevel t = case t of
+  -- TODO: validate a data declaration
+  DataDecl {} -> return ()
+  -- Validate a few things about top level function definitions
+  TopDefn parts -> do
+    -- if the number of unique names is not 1, then it is not valid.
+    when (1 /= length (nub (map defnPartName parts))) (throwError $ DefintionNameMismatch t)
+    when (numTypeDecls > 1) (throwError $ DefinitionTooManyTypes t)
+    where
+      -- There can be only one type declaration
+      isTypeDecl (DefnType {}) = True
+      isTypeDecl _ = False
+      numTypeDecls = foldl (\a b -> a + fromEnum (isTypeDecl b)) 0 parts
+
+validate :: [TopLevel SourceRange] -> Either ValidationError ()
+validate ts = do
+  mapM_ validateTopLevel ts
+  mapM_ checkUnique names
+
+  where getName :: TopLevel SourceRange -> Var
+        getName (DataDecl name _ _) = name
+        getName (TopDefn parts) = head (map defnPartName parts)
+
+        names = map getName ts
+
+        checkUnique :: Var -> Either ValidationError ()
+        checkUnique name = case isUnique name names of
+          Just True -> return ()
+          _ -> throwError $ DuplicateDefinition name -- hmm.
+
+  -- unless (allUnique names) (throwError
+
+-- TODO: this does not handle invalid programs.
+-- TODO: write a "validate" function, which ensures that syntax makes sense,
+--       and variables are bound correctly.
+toProgram :: [TopLevel a] -> Program a
+toProgram (t : ts) = case t of
+  DataDecl name targs ctors -> foldl (addDataCtor name targs) prog ctors
+  TopDefn parts -> foldl addDefnPart prog parts
+  where
+    prog = toProgram ts
+
+    addDefnPart :: Program a -> DefnPart a -> Program a
+    addDefnPart p (DefnType id t) = progAttachScheme p id (quantify (tv t) t)
+    addDefnPart p (DefnBind id b) = progAddBinding p id b
+    -- Given a constructor, convert it to
+    addDataCtor :: Id -> [Id] -> Program a -> Constructor -> Program a
+    addDataCtor name targs p c@(Constructor id _) = progAddDefinition p id (generateConstructor name targs c)
+toProgram [] = Program {programDefs = [], programClasses = []}
 
 -- initialAssumptions :: [Syntax.TopLevel] -> [Assump]
 -- initialAssumptions (v@(Syntax.Decl name val) : tls) = a : initialAssumptions tls

@@ -31,6 +31,7 @@ data Exp a
   | Inf a Var (Exp a) (Exp a) -- An infix op (ex: `Inf + 1 2`)
   | NativeCall a Var Type [Exp a] -- A native, uncurried, magic runtime call. The return type given is trusted, and the types of the arguments must be concrete.
   | Match a (Exp a) [MatchArm a]
+  | Do a [DoLine a] -- Monadic do notation
   deriving (Eq)
 
 -- makePrisms ''Exp
@@ -60,6 +61,7 @@ instance Show (Exp a) where
   show (Inf _ op l r) = "(" <> show l <> " " <> op <> " " <> show r <> ")"
   show (NativeCall _ name t args) = "#(" <> name <> " :: " <> show t <> " | " <> intercalate " | " (map show args) <> ")"
   show (Match _ e arms) = "match " <> show e <> " { " <> intercalate "; " (map show arms) <> " }"
+  show (Do _ lines) = "do { " <> intercalate "; " (map show lines) <> " }"
 
 -- Apply a transformation function to each expression in an expression tree
 visitExp :: Monad m => (Exp a -> m (Exp a)) -> Exp a -> m (Exp a)
@@ -99,6 +101,35 @@ data MatchArm a = MatchArm Pat (Exp a)
 instance Show (MatchArm a) where
   show (MatchArm p e) = show p <> " => " <> show e
 
+-------------------------------------------------------------------------------
+
+-- A line in a do block
+data DoLine a
+  = DLBind a Var (Exp a) -- an expression with a binding (>>=)
+  | DLExp a (Exp a) -- an expression w/o binding (>>)
+  deriving (Eq)
+
+instance Show (DoLine a) where
+  show (DLBind _ name exp) = name <> " <- " <> show exp
+  show (DLExp _ exp) = show exp
+
+desugarDo :: Exp a -> Exp a
+-- Terminator line
+desugarDo (Do a [l]) = case l of
+  -- do { e; ls }  ->   e >> do { ls }
+  DLExp a e -> e
+-- TODO
+
+-- Non-terminator Line
+desugarDo (Do a (l : ls)) = case l of
+  -- do { e; ls }  ->   e >> do { ls }
+  DLExp a e -> Inf a ">>" e (desugarDo $ Do a ls)
+  -- do { n <- e; ls }   ->   e >>= (fn n -> do { ls })
+  DLBind a n e -> Inf a ">>=" e (Lambda a n (desugarDo $ Do a ls))
+desugarDo x = x
+
+-------------------------------------------------------------------------------
+
 data Constructor = Constructor Id [Type]
   deriving (Eq)
 
@@ -108,12 +139,17 @@ instance Show Constructor where
 data TopLevel a
   = TopDefn [DefnPart a]
   | DataDecl Id [Id] [Constructor]
+  -- | ClassDecl a (Class) -- Tycon Tyvar [(Var, Qual Type)]
   deriving (Eq)
 
 data DefnPart a
   = DefnType Var (Qual Type)
   | DefnBind Var (Binding a)
   deriving (Eq)
+
+defnPartName :: DefnPart a -> Var
+defnPartName (DefnType v _) = v
+defnPartName (DefnBind v _) = v
 
 instance Show (DefnPart a) where
   show (DefnType id t) = id <> " :: " <> show t
@@ -171,16 +207,12 @@ generateConstructor name targs c@(Constructor id args) = def
     -- Generate a function type for this definition type
     ft = foldr fn rt args
 
--- args = zipWith (\_ i -> Var nullSourceRange ("a" <> show i)) args [0 ..]
--- pats = []
--- body = NativeCall nullSourceRange "alloc" t args
-
 -------------------------------
 
 -- Given a program, find (or create) a definition of a given name,
 -- and modify it with a provided function
 progModDef :: Program a -> Var -> (Definition a -> Definition a) -> Program a
-progModDef prog id f = prog {defs = mod (defs prog)}
+progModDef prog id f = prog {programDefs = mod (programDefs prog)}
   where
     -- mod :: [Definition a] -> [Definition a]
     mod (d@(Definition id' _ _) : ds)
@@ -203,25 +235,17 @@ progAttachScheme prog id sc = progModDef prog id mod
   where
     mod (Definition name _ bs) = Definition name (Just sc) bs
 
--- TODO: this does not handle invalid programs.
--- TODO: write a "validate" function, which ensures that syntax makes sense,
---       and variables are bound correctly.
-fuseProgram :: [TopLevel a] -> Program a
-fuseProgram (t : ts) = case t of
-  DataDecl name targs ctors -> foldl (addDataCtor name targs) prog ctors
-  TopDefn parts -> foldl addDefnPart prog parts
-  where
-    prog = fuseProgram ts
 
-    addDefnPart :: Program a -> DefnPart a -> Program a
-    addDefnPart p (DefnType id t) = progAttachScheme p id (quantify (tv t) t)
-    addDefnPart p (DefnBind id b) = progAddBinding p id b
-    -- Given a constructor, convert it to
-    addDataCtor :: Id -> [Id] -> Program a -> Constructor -> Program a
-    addDataCtor name targs p c@(Constructor id _) = progAddDefinition p id (generateConstructor name targs c)
-fuseProgram [] = Program {defs = []}
-
-newtype Program a = Program {defs :: [Definition a]}
+-- A program is just the data representation of the contents of a module. The
+-- reason this isn't called "Module" is because modules are loaded independently,
+-- then renaming is applied, and they are later all merged into a single "Program".
+-- Before this, each module has it's own "Program" -- think of it as a "Subprogram"
+data Program a = Program
+  { -- The list of definitions in this program
+    programDefs :: [Definition a],
+    -- A list of the classes defined in this program
+    programClasses :: [Class]
+  }
   deriving (Eq, Show)
 
 -- The token type:
@@ -306,3 +330,7 @@ instance Locatable a => Locatable [a] where
 
 instance Locatable (MatchArm SourceRange) where
   locate (MatchArm p e) = locate e -- mergeRange (locate p) (locate e)
+
+instance Locatable (DoLine SourceRange) where
+  locate (DLBind a _ _) = a
+  locate (DLExp a _) = a

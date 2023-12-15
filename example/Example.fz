@@ -1,47 +1,118 @@
--- A bunch of arithmetic instructions
--- TODO: move this to a class (Num)
-def (+) :: Int -> Int -> Int
-  | a + b = #(addInt :: Int | a | b )
+-- def id :: some Num a => a -> a
+--   | id x = x
 
-def (-) :: Int -> Int -> Int
-  | a - b = #(subInt :: Int | a | b )
+-- data Unit = Unit -- An empty type!
 
-def (*) :: Int -> Int -> Int
-  | (*) a b = #(mulInt :: Int | a | b )
+-- The simple monad class.
+-- class Monad m
+--   def >>= ::  m a -> (a -> m b) -> m b
+--   def >> :: m a -> m b -> m b
+--   def return :: a -> m a
+-- end
+--
+-- -- This should desugar into these definitions before type inference:
+-- def (>>=) :: some Monad m => m a -> (a -> m b) -> m b
+--
+-- def (>>) :: some Monad m => m a -> m b -> m b
+--
+-- def print :: a -> IO Unit
+-- def readline :: a
+--
+-- def main = do
+--   print 1
+--   print 2
+--   x <- readline
+--   print 3
 
-def (/) :: Int -> Int -> Int
-  | a / b = #(divInt :: Int | a | b )
 
-def (==) :: Int -> Int -> Bool
-  | a == b = #(eqInt :: Bool | a | b )
+def id x = x
 
-data Bool = True | False
+-- PATTERN MATCHING
+-- def foo1 x =
+--   match x on
+--     Foo (Bar a) => AA
+--     Foo a => BB
+--     a => CC
+
+-- -- First, group the patterns by the constructor names:
+--
+-- def foo2 x =
+--   match x on
+--     -- The least general match
+--     Foo (Bar a) => AA
+--     Foo a => BB
+--
+--     -- The most general match
+--     a => CC
+--
+-- -- For each pattern groups fuse them into a 
+--
+-- def foo3 x =
+--   match x on
+--     -- The least general match
+--     Foo (Bar a c) => AA
+--     Foo a => BB
+--
+--     -- The most general match
+--     a => CC
+
+
+
+-- def main2 = 
+
+-- def (+) :: Int -> Int -> Int
+--   | a + b = #(addInt :: Int | a | b )
+--
+-- def (-) :: Int -> Int -> Int
+--   | a - b = #(subInt :: Int | a | b )
+--
+-- def (*) :: Int -> Int -> Int
+--   | (*) a b = #(mulInt :: Int | a | b )
+--
+-- def (/) :: Int -> Int -> Int
+--   | a / b = #(divInt :: Int | a | b )
+--
+-- def (==) :: Int -> Int -> Bool
+--   | a == b = #(eqInt :: Bool | a | b )
+--
+-- data Bool = True | False
 -- data Unit = Unit
-data Maybe a = Just a | Nothing
-
-def f . g = fn x -> f (g x)
-
-def (>>=) :: m a -> (a -> m b) -> m b
-def safediv n d = if d == 0 then Nothing else Just (n / d)
-def foo x y = (safediv x y) >>= (fn val -> Just val)
+-- data Maybe a = Just a | Nothing
 
 
-def default x d = match x of
-  Just x => x
-  Nothing => d
 
--- data List a = Cons a (List a) | Nil
+-- def f . g = fn x -> f (g x)
+
+
+-- def safediv n d = if d == 0 then Nothing else Just (n / d)
+-- def foo x y = (safediv x y) >>= (fn val -> Just val)
+--
+--
+-- def default x d = match x of
+--   Just x => x
+--   Nothing => d
+--
+-- -- data List a = Cons a (List a) | Nil
 -- data Pair a b = Pair a b
-
+--
 -- data SF a b = SF (a -> (Pair b (SF a b)))
 -- def arr f = 
 --       let result = SF (fn x -> (Pair (f x) result))
 --        in result
+--
 -- def (SF f1) >>> (SF f2) =
---   let fr x = let (Pair r1 sf1) = f1 x
---                | (Pair r2 sf2) = f2 r1
---               in Pair r2 (sf1 >>> sf2)
---    in SF fr
+--   let fr x = match f1 x of
+--               Pair r1 sf1 =>
+--                  match f2 r1 of
+--                     Pair r2 sf2 => Pair r2 (sf1 >>> sf2)
+--   in SF fr
+          
+  -- let fr x = let (Pair r1 sf1) = f1 x
+  --              | (Pair r2 sf2) = f2 r1
+  --             in Pair r2 (sf1 >>> sf2)
+  --  in SF fr
+
+-- def s1 >>> f2 = 
 
 -- def foo :: Int
 --   | foo = 4
@@ -138,3 +209,4 @@ def default x d = match x of
 
 -- foo :: Int -> Int
 -- foo = \x -> if x then 1 else 0
+

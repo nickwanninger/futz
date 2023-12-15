@@ -24,10 +24,10 @@ $unisymbol = [] -- TODO
 $symbol    = [$ascsymbol $unisymbol] # [$special \_\:\"\']
 
 @syntax = 
-	def|in|if|then|else|data|match|let
+	def|in|if|then|else|data|match|let|some|class|end
 
 @layout =
-  do|of
+  do|on|of
 
 $large     = [A-Z \xc0-\xd6 \xd8-\xde]
 $small     = [a-z \xdf-\xf6 \xf8-\xff \_]
@@ -59,6 +59,7 @@ tokens :-
   "fn"                          { mkL LLambda }
   \|                            { mkL LPipe }
   \\                            { mkL LLambda }
+  \:                            { mkL LIsType }
   \::                           { mkL LIsType }
   $small $idchar*               { mkL LSym }
   $ascsymbol $ascsymbol*        { mkL LOp }
