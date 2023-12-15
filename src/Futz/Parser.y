@@ -47,7 +47,6 @@ import Futz.Syntax
     ')'      { Tok _ LRParen _ }
 
     '->'     { Tok _ LArrow _ }
-    'λ'      { Tok _ LLambda "λ" }
 
     '.'      { Tok _ LOp "." }
 
@@ -125,7 +124,6 @@ exp :: { Exp SourceRange }
 exp
 : let letdefs in exp              { Let (toRange $1 $4) $2 $4 }
 | if exp then exp else exp        { IfElse (toRange $1 $6) $2 $4 $6 }
--- | 'λ' var '.' exp                 { expandLambdaArguments (map (\x->[x]) (tokVal $2)) (toRange $1 $4) $4 }
 | fn args0 '->' exp               { expandLambdaArguments $2 (toRange $1 $4) $4 }
 | matchExp                        { $1 }
 | doExp                           { $1 }
