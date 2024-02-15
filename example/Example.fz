@@ -60,37 +60,38 @@ def id x = x
 
 -- def main2 = 
 
--- def (+) :: Int -> Int -> Int
---   | a + b = #(addInt :: Int | a | b )
+def (+) :: Int -> Int -> Int
+  | a + b = #(addInt :: Int | a | b )
+
+def (-) :: Int -> Int -> Int
+  | a - b = #(subInt :: Int | a | b )
+
+def (*) :: Int -> Int -> Int
+  | (*) a b = #(mulInt :: Int | a | b )
+
+def (/) :: Int -> Int -> Int
+  | a / b = #(divInt :: Int | a | b )
+
+def (==) :: Int -> Int -> Bool
+  | a == b = #(eqInt :: Bool | a | b )
 --
--- def (-) :: Int -> Int -> Int
---   | a - b = #(subInt :: Int | a | b )
---
--- def (*) :: Int -> Int -> Int
---   | (*) a b = #(mulInt :: Int | a | b )
---
--- def (/) :: Int -> Int -> Int
---   | a / b = #(divInt :: Int | a | b )
---
--- def (==) :: Int -> Int -> Bool
---   | a == b = #(eqInt :: Bool | a | b )
---
--- data Bool = True | False
--- data Unit = Unit
--- data Maybe a = Just a | Nothing
+data Bool = True | False
+data Unit = Unit
+data Maybe a = Just a | Nothing
 
 
 
 -- def f . g = fn x -> f (g x)
 
 
--- def safediv n d = if d == 0 then Nothing else Just (n / d)
--- def foo x y = (safediv x y) >>= (fn val -> Just val)
+def safediv n d = if d == 0 then Nothing else Just (n / d)
+def foo x y = (safediv x y) >>= (fn val -> Just val)
 --
 --
--- def default x d = match x of
---   Just x => x
---   Nothing => d
+def default x d =
+  match x on
+    Just x => x
+    Nothing => d
 --
 -- -- data List a = Cons a (List a) | Nil
 -- data Pair a b = Pair a b

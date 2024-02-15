@@ -13,6 +13,7 @@ import Futz.Syntax
 import Futz.Types
 import System.IO
 import Text.Pretty.Simple
+import Futz.Lexer.Layout (LayoutState(tokens))
 
 -- This is a representation of a logical `Module`, which
 -- is effectively the internal data format of a parsed file.
